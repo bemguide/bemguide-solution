@@ -1,18 +1,26 @@
-// Six-question onboarding (plus a Step 0 greeting) over the v2 `users`
-// schema. Stripped chrome — segmented progress strip at the top, plain
-// question heading, shadcn primitives for the form controls.
+// 12 single-question substeps + 1 greeting over the v2 `users` schema.
+// Each screen asks exactly one thing — keeps tap targets big, the
+// progress strip honest, and avoids "wall of form" on the comfort and
+// about screens that previously stacked 3-4 fields.
 //
-//   Step 0 — Greeting (zero-Q)
-//   Step 1 — Місто (Q1)                     → users.city
-//   Step 2 — Ім'я (Q2)                       → display_name + show_name_publicly
-//   Step 3 — Що цікаво (Q3)                  → interests
-//   Step 4 — Графік (Q4 + Q5)                → availability + schedule_constraints
-//   Step 5 — Що для комфорту (Q6 + Q7 + Q8)   → company_preference + accessibility_flags + triggers_to_avoid
-//   Step 6 — Про тебе (Q9 + Q10 + Q11 + Q12)   → veteran_status + age_range + role_in_group + bio
+//   step  field                  PATCH /me slice
+//   ────  ─────────────────────  ────────────────────────────────
+//   0     greeting               (no PATCH)
+//   1     city                   { city }
+//   2     display_name+privacy    { display_name, show_name_publicly }
+//   3     interests              { interests }
+//   4     availability           { availability }
+//   5     schedule_constraints    { schedule_constraints }
+//   6     company_preference     { company_preference }
+//   7     accessibility_flags    { accessibility_flags }
+//   8     triggers_to_avoid      { triggers_to_avoid }
+//   9     veteran_status         { veteran_status }
+//   10    role_in_group          { role_in_group }
+//   11    age_range              { age_range }
+//   12    bio                    { bio }
 //
-// Each step PATCHes /me with its slice; the backend's
-// users_match_recompute trigger fans the change into event_matches so
-// the next /feed is already personalised.
+// Pre-fill from Telegram (where TG exposes it):
+//   - display_name <- initDataUnsafe.user.first_name (waits for SDK)
 //
 // Deep-link bypass:
 //   evt_<id>   → /m/event/<id>
@@ -25,7 +33,6 @@ import { useRouter } from "next/navigation";
 import { LocateFixed, MapPin, X } from "lucide-react";
 import { DEMO_CITIES } from "@poruch/shared";
 import {
-  FieldLabel,
   OnboardingStep,
   StepHeading,
   StepSubheading,
@@ -37,7 +44,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import {
   getStartParam,
-  getTgUser,
+  getTgUserWithWait,
   tgGetLocation,
   tgLocationDenied,
   tgOpenLocationSettings,
@@ -65,8 +72,21 @@ import {
   type Option,
 } from "./options";
 
-const TOTAL_STEPS = 6;
-type StepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+const TOTAL_STEPS = 12;
+type StepIndex =
+  | 0
+  | 1
+  | 2
+  | 3
+  | 4
+  | 5
+  | 6
+  | 7
+  | 8
+  | 9
+  | 10
+  | 11
+  | 12;
 
 const NEAREST_CITIES = [...DEMO_CITIES] as const;
 
@@ -136,20 +156,33 @@ export function OnboardingFlow() {
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
+  // Bootstrap: deep-link bypass + Telegram pre-fill (waits for SDK).
   useEffect(() => {
-    const param = getStartParam();
-    if (param.startsWith("evt_")) {
-      setBypassed(true);
-      router.replace(`/m/event/${param.slice(4)}`);
-      return;
+    let cancelled = false;
+    async function init() {
+      const param = getStartParam();
+      if (param.startsWith("evt_")) {
+        setBypassed(true);
+        router.replace(`/m/event/${param.slice(4)}`);
+        return;
+      }
+      if (param.startsWith("defer_")) {
+        setBypassed(true);
+        router.replace("/m/feed");
+        return;
+      }
+      const tg = await getTgUserWithWait();
+      if (cancelled) return;
+      // Compose a pre-filled display_name from whatever TG gave us.
+      // first_name alone reads more naturally than full name; we add
+      // last_name only if first_name is missing or empty.
+      const candidate = (tg.firstName ?? tg.lastName ?? tg.username ?? "").trim();
+      if (candidate) setState((s) => ({ ...s, displayName: candidate }));
     }
-    if (param.startsWith("defer_")) {
-      setBypassed(true);
-      router.replace("/m/feed");
-      return;
-    }
-    const tg = getTgUser();
-    if (tg.firstName) setState((s) => ({ ...s, displayName: tg.firstName ?? "" }));
+    void init();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   if (bypassed) return null;
@@ -177,68 +210,13 @@ export function OnboardingFlow() {
     }
   }
 
-  function commitStep0() {
-    void advance(null, 1);
+  // ---------- Per-step commits ----------
+
+  function go(skipPatch: boolean, patchFn: () => UserPatch, next: StepIndex | "done") {
+    void advance(skipPatch ? {} : patchFn(), next);
   }
 
-  function commitStep1(skip = false) {
-    void advance(skip || !state.city.trim() ? {} : { city: state.city.trim() }, 2);
-  }
-
-  function commitStep2(skip = false) {
-    if (skip) return void advance({}, 3);
-    const name = state.displayName.trim();
-    void advance(
-      {
-        display_name: name || null,
-        show_name_publicly: name ? state.showNamePublicly : false,
-      },
-      3,
-    );
-  }
-
-  function commitStep3(skip = false) {
-    void advance(skip ? {} : { interests: state.interests }, 4);
-  }
-
-  function commitStep4(skip = false) {
-    if (skip) return void advance({}, 5);
-    const constraints = state.scheduleConstraints.trim();
-    void advance(
-      {
-        availability: state.availability,
-        schedule_constraints: constraints || null,
-      },
-      5,
-    );
-  }
-
-  function commitStep5(skip = false) {
-    if (skip) return void advance({}, 6);
-    void advance(
-      {
-        company_preference: state.companyPreference,
-        accessibility_flags: state.accessibility,
-        triggers_to_avoid: state.triggers,
-      },
-      6,
-    );
-  }
-
-  function commitStep6(skip = false) {
-    if (skip) return void advance({}, "done");
-    const role = state.roleInGroup.trim();
-    const bio = state.bio.trim();
-    void advance(
-      {
-        veteran_status: state.veteranStatus,
-        age_range: state.ageRange,
-        role_in_group: role || null,
-        bio: bio || null,
-      },
-      "done",
-    );
-  }
+  // ---------- Step 1: city geolocation ----------
 
   async function detectLocation() {
     if (locating) return;
@@ -268,13 +246,13 @@ export function OnboardingFlow() {
   if (step === 0) {
     return (
       <OnboardingStep
-        step={0}
+        step={-1}
         total={TOTAL_STEPS}
         primaryLabel="Подивитись поруч"
         busy={busy}
-        onPrimary={commitStep0}
+        onPrimary={() => void advance(null, 1)}
       >
-        <div className="space-y-4 pt-2">
+        <div className="space-y-3 pt-2">
           <StepHeading>
             Привіт. Я допомагаю ветеранам зібратися разом — на каву, прогулянку, спорт.
           </StepHeading>
@@ -290,13 +268,15 @@ export function OnboardingFlow() {
   if (step === 1) {
     return (
       <OnboardingStep
-        step={1}
+        step={0}
         total={TOTAL_STEPS}
         primaryLabel="Далі"
         skipLabel="Не зараз, тільки гляну"
         busy={busy}
-        onPrimary={() => commitStep1(false)}
-        onSkip={() => commitStep1(true)}
+        onPrimary={() =>
+          go(!state.city.trim(), () => ({ city: state.city.trim() }), 2)
+        }
+        onSkip={() => void advance({}, 2)}
       >
         <div className="space-y-2">
           <StepHeading>Де ти зараз?</StepHeading>
@@ -316,21 +296,28 @@ export function OnboardingFlow() {
   }
 
   if (step === 2) {
+    const name = state.displayName.trim();
     return (
       <OnboardingStep
-        step={2}
+        step={1}
         total={TOTAL_STEPS}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => commitStep2(false)}
-        onSkip={() => commitStep2(true)}
+        onPrimary={() =>
+          void advance(
+            {
+              display_name: name || null,
+              show_name_publicly: name ? state.showNamePublicly : false,
+            },
+            3,
+          )
+        }
+        onSkip={() => void advance({}, 3)}
       >
         <div className="space-y-2">
           <StepHeading>Як до тебе звертатися?</StepHeading>
-          <StepSubheading>
-            Можна анонімно — інші бачитимуть тільки кількість.
-          </StepSubheading>
+          <StepSubheading>Можна анонімно — тоді інші бачитимуть тільки кількість.</StepSubheading>
         </div>
         <NameStep
           displayName={state.displayName}
@@ -346,13 +333,13 @@ export function OnboardingFlow() {
   if (step === 3) {
     return (
       <OnboardingStep
-        step={3}
+        step={2}
         total={TOTAL_STEPS}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => commitStep3(false)}
-        onSkip={() => commitStep3(true)}
+        onPrimary={() => go(false, () => ({ interests: state.interests }), 4)}
+        onSkip={() => void advance({}, 4)}
       >
         <div className="space-y-2">
           <StepHeading>Що цікаво?</StepHeading>
@@ -371,23 +358,22 @@ export function OnboardingFlow() {
   if (step === 4) {
     return (
       <OnboardingStep
-        step={4}
+        step={3}
         total={TOTAL_STEPS}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => commitStep4(false)}
-        onSkip={() => commitStep4(true)}
+        onPrimary={() => go(false, () => ({ availability: state.availability }), 5)}
+        onSkip={() => void advance({}, 5)}
       >
         <div className="space-y-2">
           <StepHeading>Коли тобі зручно?</StepHeading>
-          <StepSubheading>Що з графіку важливо врахувати?</StepSubheading>
+          <StepSubheading>Можна вибрати кілька.</StepSubheading>
         </div>
-        <ScheduleStep
-          availability={state.availability}
-          onAvailability={(availability) => setState({ ...state, availability })}
-          constraints={state.scheduleConstraints}
-          onConstraints={(scheduleConstraints) => setState({ ...state, scheduleConstraints })}
+        <ChipMultiToggleGroup
+          options={AVAILABILITY_OPTIONS}
+          value={state.availability}
+          onChange={(availability) => setState({ ...state, availability })}
         />
         {error ? <ErrorLine>{error}</ErrorLine> : null}
       </OnboardingStep>
@@ -397,55 +383,227 @@ export function OnboardingFlow() {
   if (step === 5) {
     return (
       <OnboardingStep
-        step={5}
+        step={4}
         total={TOTAL_STEPS}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => commitStep5(false)}
-        onSkip={() => commitStep5(true)}
+        onPrimary={() =>
+          void advance(
+            { schedule_constraints: state.scheduleConstraints.trim() || null },
+            6,
+          )
+        }
+        onSkip={() => void advance({}, 6)}
       >
         <div className="space-y-2">
-          <StepHeading>Що важливо для комфорту?</StepHeading>
-          <StepSubheading>Усе опційно — і можна змінити будь-коли.</StepSubheading>
+          <StepHeading>Що з графіку важливо врахувати?</StepHeading>
+          <StepSubheading>
+            Наприклад: маленька дитина, догляд за кимось, інші справи.
+          </StepSubheading>
         </div>
-        <ComfortStep
-          companyPreference={state.companyPreference}
-          onCompanyPreference={(companyPreference) => setState({ ...state, companyPreference })}
-          accessibility={state.accessibility}
-          onAccessibility={(accessibility) => setState({ ...state, accessibility })}
-          triggers={state.triggers}
-          onTriggers={(triggers) => setState({ ...state, triggers })}
+        <Textarea
+          value={state.scheduleConstraints}
+          maxLength={500}
+          onChange={(e) => setState({ ...state, scheduleConstraints: e.target.value })}
+          rows={4}
+          placeholder="напиши вільно — як зручно"
+          className="border-border bg-card focus-visible:border-b-primary min-h-[120px] rounded-xl border px-3 py-3 text-base"
         />
         {error ? <ErrorLine>{error}</ErrorLine> : null}
       </OnboardingStep>
     );
   }
 
+  if (step === 6) {
+    return (
+      <OnboardingStep
+        step={5}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() =>
+          void advance({ company_preference: state.companyPreference }, 7)
+        }
+        onSkip={() => void advance({}, 7)}
+      >
+        <div className="space-y-2">
+          <StepHeading>В якій компанії бути?</StepHeading>
+          <StepSubheading>Один варіант. Можна змінити будь-коли.</StepSubheading>
+        </div>
+        <ChipSingleToggleGroup
+          options={COMPANY_PREFERENCE_OPTIONS}
+          value={state.companyPreference}
+          onChange={(v) => v && setState({ ...state, companyPreference: v })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 7) {
+    return (
+      <OnboardingStep
+        step={6}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() =>
+          void advance({ accessibility_flags: state.accessibility }, 8)
+        }
+        onSkip={() => void advance({}, 8)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Що важливо для комфорту?</StepHeading>
+          <StepSubheading>Доступність — обери все, що для тебе має значення.</StepSubheading>
+        </div>
+        <ChipMultiToggleGroup
+          options={ACCESSIBILITY_OPTIONS}
+          value={state.accessibility}
+          onChange={(accessibility) => setState({ ...state, accessibility })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 8) {
+    return (
+      <OnboardingStep
+        step={7}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() =>
+          void advance({ triggers_to_avoid: state.triggers }, 9)
+        }
+        onSkip={() => void advance({}, 9)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Тригери, яких уникати?</StepHeading>
+          <StepSubheading>Не покажемо подій, де таке буде помітно.</StepSubheading>
+        </div>
+        <ChipMultiToggleGroup
+          options={TRIGGER_OPTIONS}
+          value={state.triggers}
+          onChange={(triggers) => setState({ ...state, triggers })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 9) {
+    return (
+      <OnboardingStep
+        step={8}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => void advance({ veteran_status: state.veteranStatus }, 10)}
+        onSkip={() => void advance({}, 10)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Який твій статус?</StepHeading>
+          <StepSubheading>Це для матчингу. Ніхто інший не побачить.</StepSubheading>
+        </div>
+        <ChipSingleToggleGroup
+          options={VETERAN_STATUS_OPTIONS}
+          value={state.veteranStatus}
+          onChange={(v) => setState({ ...state, veteranStatus: v })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 10) {
+    return (
+      <OnboardingStep
+        step={9}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() =>
+          void advance(
+            { role_in_group: state.roleInGroup.trim() || null },
+            11,
+          )
+        }
+        onSkip={() => void advance({}, 11)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Що приносиш у збір?</StepHeading>
+          <StepSubheading>Без правильних відповідей. «Просто буду» — теж валідно.</StepSubheading>
+        </div>
+        <ChipSingleToggleGroup
+          options={ROLE_IN_GROUP_OPTIONS}
+          value={state.roleInGroup || null}
+          onChange={(v) => setState({ ...state, roleInGroup: v ?? "" })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 11) {
+    return (
+      <OnboardingStep
+        step={10}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => void advance({ age_range: state.ageRange }, 12)}
+        onSkip={() => void advance({}, 12)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Орієнтовний вік?</StepHeading>
+          <StepSubheading>Допомагає зібрати схожих за віком.</StepSubheading>
+        </div>
+        <ChipSingleToggleGroup
+          options={AGE_RANGE_OPTIONS}
+          value={state.ageRange}
+          onChange={(v) => setState({ ...state, ageRange: v })}
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  // step === 12
   return (
     <OnboardingStep
-      step={6}
+      step={11}
       total={TOTAL_STEPS}
       primaryLabel="Готово"
       skipLabel="Пропустити"
       busy={busy}
-      onPrimary={() => commitStep6(false)}
-      onSkip={() => commitStep6(true)}
+      onPrimary={() =>
+        void advance({ bio: state.bio.trim() || null }, "done")
+      }
+      onSkip={() => void advance({}, "done")}
     >
       <div className="space-y-2">
-        <StepHeading>Останнє — про тебе</StepHeading>
-        <StepSubheading>Це для матчингу. Ніхто інший не побачить.</StepSubheading>
+        <StepHeading>Розкажи коротко про себе</StepHeading>
+        <StepSubheading>
+          Кілька речень, як комфортно з тобою. Це лише для матчингу.
+        </StepSubheading>
       </div>
-      <AboutStep
-        veteranStatus={state.veteranStatus}
-        onVeteranStatus={(veteranStatus) => setState({ ...state, veteranStatus })}
-        ageRange={state.ageRange}
-        onAgeRange={(ageRange) => setState({ ...state, ageRange })}
-        role={state.roleInGroup}
-        onRole={(roleInGroup) => setState({ ...state, roleInGroup })}
-        bio={state.bio}
-        onBio={(bio) => setState({ ...state, bio })}
+      <Textarea
+        value={state.bio}
+        maxLength={500}
+        onChange={(e) => setState({ ...state, bio: e.target.value })}
+        rows={5}
+        placeholder="наприклад, «люблю спокійні розмови, без поспіху»"
+        className="border-border bg-card focus-visible:border-b-primary min-h-[140px] rounded-xl border px-3 py-3 text-base"
       />
+      <p className="text-muted-foreground text-right text-xs">{state.bio.length}/500</p>
       {error ? <ErrorLine>{error}</ErrorLine> : null}
     </OnboardingStep>
   );
@@ -598,7 +756,6 @@ function NameStep({
         autoComplete="given-name"
         className="h-11 rounded-xl border bg-card px-3"
       />
-
       <RadioGroup
         value={mode}
         onValueChange={(v) => onShowPublicly(v === "public")}
@@ -642,141 +799,6 @@ function ModeOption({
       <span className="text-sm font-semibold leading-tight">{title}</span>
       <span className="text-xs leading-tight opacity-85">{subtitle}</span>
     </Label>
-  );
-}
-
-function ScheduleStep({
-  availability,
-  onAvailability,
-  constraints,
-  onConstraints,
-}: {
-  availability: string[];
-  onAvailability: (v: string[]) => void;
-  constraints: string;
-  onConstraints: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <ChipMultiToggleGroup
-        options={AVAILABILITY_OPTIONS}
-        value={availability}
-        onChange={onAvailability}
-      />
-      <div className="space-y-2">
-        <FieldLabel>Що з графіку врахувати</FieldLabel>
-        <Textarea
-          value={constraints}
-          maxLength={500}
-          onChange={(e) => onConstraints(e.target.value)}
-          rows={3}
-          placeholder="наприклад, «маленька дитина — не цілий день»"
-          className="border-border bg-card focus-visible:border-b-primary min-h-[88px] rounded-xl border px-3 py-2 text-base"
-        />
-      </div>
-    </div>
-  );
-}
-
-function ComfortStep({
-  companyPreference,
-  onCompanyPreference,
-  accessibility,
-  onAccessibility,
-  triggers,
-  onTriggers,
-}: {
-  companyPreference: CompanyPreference;
-  onCompanyPreference: (v: CompanyPreference) => void;
-  accessibility: AccessibilityFlag[];
-  onAccessibility: (v: AccessibilityFlag[]) => void;
-  triggers: string[];
-  onTriggers: (v: string[]) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <FieldLabel>В якій компанії бути</FieldLabel>
-        <ChipSingleToggleGroup
-          options={COMPANY_PREFERENCE_OPTIONS}
-          value={companyPreference}
-          onChange={(v) => v && onCompanyPreference(v)}
-        />
-      </div>
-      <div className="space-y-2">
-        <FieldLabel>Доступність</FieldLabel>
-        <ChipMultiToggleGroup
-          options={ACCESSIBILITY_OPTIONS}
-          value={accessibility}
-          onChange={onAccessibility}
-        />
-      </div>
-      <div className="space-y-2">
-        <FieldLabel>Тригери, яких уникати</FieldLabel>
-        <ChipMultiToggleGroup
-          options={TRIGGER_OPTIONS}
-          value={triggers}
-          onChange={onTriggers}
-        />
-      </div>
-    </div>
-  );
-}
-
-function AboutStep({
-  veteranStatus,
-  onVeteranStatus,
-  ageRange,
-  onAgeRange,
-  role,
-  onRole,
-  bio,
-  onBio,
-}: {
-  veteranStatus: VeteranStatus | null;
-  onVeteranStatus: (v: VeteranStatus | null) => void;
-  ageRange: AgeRange | null;
-  onAgeRange: (v: AgeRange | null) => void;
-  role: string;
-  onRole: (v: string) => void;
-  bio: string;
-  onBio: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <FieldLabel>Статус</FieldLabel>
-        <ChipSingleToggleGroup
-          options={VETERAN_STATUS_OPTIONS}
-          value={veteranStatus}
-          onChange={onVeteranStatus}
-        />
-      </div>
-      <div className="space-y-2">
-        <FieldLabel>Вік</FieldLabel>
-        <ChipSingleToggleGroup options={AGE_RANGE_OPTIONS} value={ageRange} onChange={onAgeRange} />
-      </div>
-      <div className="space-y-2">
-        <FieldLabel>Що приносиш у збір</FieldLabel>
-        <ChipSingleToggleGroup
-          options={ROLE_IN_GROUP_OPTIONS}
-          value={role || null}
-          onChange={(v) => onRole(v ?? "")}
-        />
-      </div>
-      <div className="space-y-2">
-        <FieldLabel>Про себе (вільно)</FieldLabel>
-        <Textarea
-          value={bio}
-          maxLength={500}
-          onChange={(e) => onBio(e.target.value)}
-          rows={4}
-          placeholder="кілька речень — як комфортно з тобою, що тобі важливо"
-          className="border-border bg-card focus-visible:border-b-primary min-h-[100px] rounded-xl border px-3 py-2 text-base"
-        />
-        <p className="text-muted-foreground text-right text-xs">{bio.length}/500</p>
-      </div>
-    </div>
   );
 }
 

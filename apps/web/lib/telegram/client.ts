@@ -15,13 +15,38 @@ export function getInitData(): string {
 }
 
 /** First name from Telegram user info, used as a default display_name. */
-export function getTgUser(): { id?: number; firstName?: string; languageCode?: string } {
+export function getTgUser(): {
+  id?: number;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  languageCode?: string;
+} {
   const u = tg()?.initDataUnsafe?.user;
   return {
     id: u?.id,
     firstName: u?.first_name,
+    lastName: u?.last_name,
+    username: u?.username,
     languageCode: u?.language_code,
   };
+}
+
+/**
+ * Read TG user info, polling for up to `timeoutMs` while
+ * `telegram-web-app.js` finishes loading. The non-async `getTgUser()`
+ * returns empty fields when called too early (before SDK is on
+ * window) — pages that need the data for first paint should use this.
+ */
+export async function getTgUserWithWait(timeoutMs = 3000): Promise<ReturnType<typeof getTgUser>> {
+  if (tg()) return getTgUser();
+  if (typeof window === "undefined") return getTgUser();
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => window.setTimeout(r, 100));
+    if (tg()) return getTgUser();
+  }
+  return getTgUser();
 }
 
 /** Start param from t.me/<bot>?startapp=evt_<id> deep links. */

@@ -73,21 +73,24 @@ export function OnboardingStep({
 }
 
 /**
- * Render `total + 1` bars (one per step, including the greeting).
- * The first `step + 1` are filled with primary; the rest stay muted.
+ * Render `total` bars (one per question). The first `step + 1` are
+ * filled with primary; the rest stay muted.
+ *
+ * Convention: pass `step = -1` on the greeting screen (zero-Q) so no
+ * bars are filled yet, then `step = 0..total-1` for each question,
+ * filling 1..total bars as the user advances.
  */
 function SegmentedProgress({ step, total }: { step: number; total: number }) {
-  const segments = total + 1;
   return (
     <div
       className="bg-background shrink-0 px-5 pb-3 pt-4"
       role="progressbar"
       aria-valuemin={0}
-      aria-valuemax={segments}
-      aria-valuenow={step + 1}
+      aria-valuemax={total}
+      aria-valuenow={Math.max(0, step + 1)}
     >
-      <div className="flex items-center gap-1.5">
-        {Array.from({ length: segments }).map((_, i) => (
+      <div className="flex items-center gap-1">
+        {Array.from({ length: total }).map((_, i) => (
           <span
             key={i}
             className={cn(
