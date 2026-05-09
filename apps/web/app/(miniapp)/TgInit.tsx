@@ -1,15 +1,18 @@
 // Boots the Telegram WebApp SDK once on mount.
 //
-// Critical: if Telegram.WebApp.ready() is never called, Telegram leaves its
-// own loading placeholder ON TOP of the page. The app renders underneath but
-// every tap hits the placeholder, not our buttons — symptom: "I can see the
-// onboarding but nothing responds to taps."
+// Why imperative loading instead of <Script strategy="...">:
+//   Both `beforeInteractive` and `afterInteractive` produced symptoms in real
+//   TMA + Next 16 + Turbopack dev: the browser saw the <link rel=preload> but
+//   the matching <script> tag was injected too late (or not at all). Result:
+//   window.Telegram.WebApp never landed, ready() was never called, Telegram
+//   left its OWN loading placeholder on top of our page, and every tap was
+//   eaten by the placeholder.
 //
-// Race condition: <Script strategy="beforeInteractive"> is supposed to load
-// the SDK before React hydrates, but in Next 16 + Turbopack dev (and in some
-// real TMA clients) the script can land slightly after the first useEffect.
-// We poll for window.Telegram.WebApp every 50ms for up to ~3 seconds and call
-// ready/expand the moment it appears.
+// We now:
+//   1. Reuse the SDK if Telegram already injected it (most TMA clients do).
+//   2. Otherwise inject our own <script> with onload/onerror + a 3s poll fallback.
+//   3. As soon as Telegram.WebApp appears, call ready / expand / requestFullscreen
+//      / disableVerticalSwipes / set{Header,Background}Color.
 
 "use client";
 
@@ -24,23 +27,64 @@ type WebAppLike = {
   enableClosingConfirmation?: () => void;
   setHeaderColor?: (c: string) => void;
   setBackgroundColor?: (c: string) => void;
-  onEvent?: (event: string, cb: () => void) => void;
 };
+
+const SDK_URL = "https://telegram.org/js/telegram-web-app.js";
+
+function getWebApp(): WebAppLike | null {
+  if (typeof window === "undefined") return null;
+  return (window as { Telegram?: { WebApp?: WebAppLike } }).Telegram?.WebApp ?? null;
+}
+
+function loadSDK(): Promise<WebAppLike | null> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") return resolve(null);
+
+    const direct = getWebApp();
+    if (direct) return resolve(direct);
+
+    // Reuse an existing tag if one is already in the page (e.g. injected by
+    // an earlier mount or by a previous Next.js layout pass).
+    let tag = document.querySelector<HTMLScriptElement>('script[src*="telegram-web-app"]');
+    if (!tag) {
+      tag = document.createElement("script");
+      tag.src = SDK_URL;
+      tag.async = true;
+      document.head.appendChild(tag);
+    }
+
+    let settled = false;
+    const finish = (wa: WebAppLike | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(wa);
+    };
+
+    tag.addEventListener("load", () => finish(getWebApp()));
+    tag.addEventListener("error", () => finish(null));
+
+    // Some clients have already-evaluated the script before our listener;
+    // poll briefly to catch them. 3s is plenty.
+    let attempts = 0;
+    const tick = () => {
+      const wa = getWebApp();
+      if (wa) return finish(wa);
+      if (++attempts < 60) {
+        window.setTimeout(tick, 50);
+      } else {
+        finish(null);
+      }
+    };
+    tick();
+  });
+}
 
 export function TgInit() {
   useEffect(() => {
     let cancelled = false;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 60; // 60 × 50ms = 3 seconds
-
-    function init() {
-      if (cancelled) return;
-      const wa = (window as { Telegram?: { WebApp?: WebAppLike } }).Telegram?.WebApp;
-      if (!wa) {
-        if (attempts++ < MAX_ATTEMPTS) {
-          window.setTimeout(init, 50);
-        } else if (process.env.NODE_ENV !== "production") {
-          // Outside Telegram (regular browser) — expected; nothing to do.
+    loadSDK().then((wa) => {
+      if (cancelled || !wa) {
+        if (!wa && process.env.NODE_ENV !== "production") {
           console.debug("[TgInit] Telegram.WebApp not available; running in plain browser");
         }
         return;
@@ -48,14 +92,13 @@ export function TgInit() {
       try {
         wa.ready();
         wa.expand();
-        // Bot API 8.0+: request true fullscreen (no Telegram chrome). Older
-        // clients silently lack the method and we fall back to expand() above.
-        // Wrap in its own try/catch — some clients throw "FULLSCREEN_FAILED"
-        // when fullscreen is unavailable rather than just no-op'ing the call.
+        // Bot API 8.0+: true fullscreen. Older clients silently lack the method
+        // or throw FULLSCREEN_FAILED — both are fine, expand() already gave us
+        // the maximum vertical area.
         try {
           wa.requestFullscreen?.();
         } catch {
-          /* fullscreen unavailable — expand() already gave us full height */
+          /* unsupported — keep expand()'s result */
         }
         wa.disableVerticalSwipes?.();
         wa.setHeaderColor?.("#FBF7F0");
@@ -63,9 +106,7 @@ export function TgInit() {
       } catch (e) {
         console.warn("[TgInit] init threw:", e);
       }
-    }
-
-    init();
+    });
     return () => {
       cancelled = true;
     };

@@ -1,6 +1,9 @@
-// Wraps all /m/* routes. Loads the Telegram WebApp SDK and calls expand() on mount.
+// Wraps all /m/* routes. The Telegram WebApp SDK is loaded imperatively from
+// inside <TgInit /> on mount — both `next/script` strategies were producing a
+// "preloaded but not used" warning in TMA + Next 16 + Turbopack dev that left
+// `window.Telegram.WebApp` undefined and Telegram's loading placeholder
+// permanently on top, blocking every tap.
 
-import Script from "next/script";
 import type { Metadata } from "next";
 import { TgInit } from "./TgInit";
 
@@ -12,12 +15,6 @@ export const metadata: Metadata = {
 export default function MiniappLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      {/*
-        afterInteractive is more reliable in Next 16 + Turbopack than
-        beforeInteractive for third-party SDKs. TgInit polls for the SDK
-        until it lands, so the timing relative to hydration doesn't matter.
-      */}
-      <Script src="https://telegram.org/js/telegram-web-app.js" strategy="afterInteractive" />
       <TgInit />
       {/*
         Layout is exactly one TMA viewport tall — fall back to 100dvh outside Telegram.
