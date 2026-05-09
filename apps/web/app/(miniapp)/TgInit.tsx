@@ -18,9 +18,13 @@ import { useEffect } from "react";
 type WebAppLike = {
   ready: () => void;
   expand: () => void;
+  isFullscreen?: boolean;
+  requestFullscreen?: () => void;
   disableVerticalSwipes?: () => void;
+  enableClosingConfirmation?: () => void;
   setHeaderColor?: (c: string) => void;
   setBackgroundColor?: (c: string) => void;
+  onEvent?: (event: string, cb: () => void) => void;
 };
 
 export function TgInit() {
@@ -44,6 +48,15 @@ export function TgInit() {
       try {
         wa.ready();
         wa.expand();
+        // Bot API 8.0+: request true fullscreen (no Telegram chrome). Older
+        // clients silently lack the method and we fall back to expand() above.
+        // Wrap in its own try/catch — some clients throw "FULLSCREEN_FAILED"
+        // when fullscreen is unavailable rather than just no-op'ing the call.
+        try {
+          wa.requestFullscreen?.();
+        } catch {
+          /* fullscreen unavailable — expand() already gave us full height */
+        }
         wa.disableVerticalSwipes?.();
         wa.setHeaderColor?.("#FBF7F0");
         wa.setBackgroundColor?.("#FBF7F0");
