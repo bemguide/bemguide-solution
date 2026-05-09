@@ -1,19 +1,33 @@
+// Error codes are lowercase machine-readable identifiers — wire-compatible
+// with the v2 frontend contract. Routes may also pass route-specific codes
+// (e.g. 'opportunity_not_found', 'already_rsvped', 'not_attendee', 'event_started').
 export type ErrorCode =
-  | 'VALIDATION_FAILED'
-  | 'UNAUTHENTICATED'
-  | 'FORBIDDEN'
-  | 'NOT_FOUND'
-  | 'CONFLICT'
-  | 'RATE_LIMITED'
-  | 'UPSTREAM_ERROR'
-  | 'INTERNAL';
+  | 'invalid_body'
+  | 'validation_failed'
+  | 'unauthorized'
+  | 'expired'
+  | 'forbidden'
+  | 'not_found'
+  | 'conflict'
+  | 'rate_limited'
+  | 'upstream'
+  | 'internal'
+  // Route-specific codes (free-form strings allowed below; these are the
+  // canonical contract names when a generic code isn't precise enough).
+  | 'opportunity_not_found'
+  | 'user_not_found'
+  | 'not_attendee'
+  | 'already_rsvped'
+  | 'event_started'
+  | 'invalid_init_data'
+  | 'expired_init_data'
+  | (string & {});
 
 export interface ErrorEnvelope {
-  error: {
-    code: ErrorCode;
-    message: string;
-    details?: unknown;
-  };
+  ok: false;
+  error: ErrorCode;
+  message: string;
+  details?: unknown;
 }
 
 export class AppError extends Error {
@@ -30,29 +44,35 @@ export class AppError extends Error {
 
   toEnvelope(): ErrorEnvelope {
     return {
-      error: { code: this.code, message: this.message, details: this.details },
+      ok: false,
+      error: this.code,
+      message: this.message,
+      ...(this.details === undefined ? {} : { details: this.details }),
     };
   }
 
   static validation(message: string, details?: unknown) {
-    return new AppError({ code: 'VALIDATION_FAILED', message, statusCode: 400, details });
+    return new AppError({ code: 'validation_failed', message, statusCode: 400, details });
   }
   static unauthenticated(message = 'Authentication required') {
-    return new AppError({ code: 'UNAUTHENTICATED', message, statusCode: 401 });
+    return new AppError({ code: 'unauthorized', message, statusCode: 401 });
   }
-  static forbidden(message = 'Forbidden') {
-    return new AppError({ code: 'FORBIDDEN', message, statusCode: 403 });
+  static expired(message = 'Token expired') {
+    return new AppError({ code: 'expired', message, statusCode: 401 });
   }
-  static notFound(message = 'Not found') {
-    return new AppError({ code: 'NOT_FOUND', message, statusCode: 404 });
+  static forbidden(message = 'Forbidden', code: ErrorCode = 'forbidden') {
+    return new AppError({ code, message, statusCode: 403 });
   }
-  static conflict(message: string) {
-    return new AppError({ code: 'CONFLICT', message, statusCode: 409 });
+  static notFound(message = 'Not found', code: ErrorCode = 'not_found') {
+    return new AppError({ code, message, statusCode: 404 });
+  }
+  static conflict(message: string, code: ErrorCode = 'conflict') {
+    return new AppError({ code, message, statusCode: 409 });
   }
   static upstream(message: string, details?: unknown) {
-    return new AppError({ code: 'UPSTREAM_ERROR', message, statusCode: 502, details });
+    return new AppError({ code: 'upstream', message, statusCode: 502, details });
   }
   static internal(message = 'Internal server error') {
-    return new AppError({ code: 'INTERNAL', message, statusCode: 500 });
+    return new AppError({ code: 'internal', message, statusCode: 500 });
   }
 }

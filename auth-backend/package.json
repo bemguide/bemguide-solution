@@ -15,16 +15,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint . --ext .ts",
-    "format": "prettier --write \"**/*.{ts,json,md}\""
+    "format": "prettier --write \"**/*.{ts,json,md}\"",
+    "worker:dispatch": "tsx src/workers/dispatch-invitations.ts",
+    "worker:rooms": "tsx src/workers/provision-rooms.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
-    "@fastify/multipart": "^8.3.0",
     "@fastify/rate-limit": "^9.1.0",
     "@fastify/sensible": "^5.6.0",
+    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.45.4",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.1",
+    "jose": "^6.2.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -32,7 +35,6 @@
     "@typescript-eslint/eslint-plugin": "^7.16.0",
     "@typescript-eslint/parser": "^7.16.0",
     "eslint": "^8.57.0",
-    "form-data": "^4.0.0",
     "pino-pretty": "^11.2.1",
     "prettier": "^3.3.2",
     "tsx": "^4.16.2",

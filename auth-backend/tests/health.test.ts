@@ -23,7 +23,9 @@ describe('GET /health', () => {
     const res = await app.inject({ method: 'GET', url: '/does-not-exist' });
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual({
-      error: { code: 'NOT_FOUND', message: 'Route not found' },
+      ok: false,
+      error: 'not_found',
+      message: 'Route not found',
     });
   });
 });
