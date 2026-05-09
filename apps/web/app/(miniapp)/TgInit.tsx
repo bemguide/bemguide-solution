@@ -1,17 +1,25 @@
-// Boots the Telegram WebApp SDK once on mount and keeps the Mini App in
-// fullscreen mode whenever the host client supports it (Bot API 8.0+).
+// Boots the Telegram WebApp SDK once on mount and tries to take the full
+// available area on every host that supports it.
 //
-// Why imperative SDK loading instead of <Script strategy="...">:
-//   In Next 16 + Turbopack dev, both beforeInteractive and afterInteractive
-//   left the script as a "preloaded but never used" link, so window.Telegram
-//   .WebApp never landed → ready() was never called → Telegram kept its
-//   loading placeholder on top of our app → every tap was eaten by it.
+// CRITICAL: every Mini App method has a minimum Bot API version. Calling a
+// method on an older client logs a warning ("Method X is not supported in
+// version Y") to the console. We feature-gate every optional call with
+// `isVersionAtLeast()` so older clients (e.g. Telegram Desktop reporting
+// 6.0) silently skip what they can't do.
 //
-// Why fullscreen needs special handling:
-//   requestFullscreen() reports failure asynchronously via a `fullscreenFailed`
-//   event, NOT by throwing. A try/catch around the call won't catch it. Some
-//   desktop clients also require a user gesture before allowing fullscreen, so
-//   we install a one-shot listener on first pointerdown that retries.
+// Method → minimum version (per https://core.telegram.org/bots/webapps):
+//   ready, expand, close, MainButton, BackButton, onEvent           — 6.0
+//   setHeaderColor, setBackgroundColor                              — 6.1
+//   showAlert, showConfirm, HapticFeedback                          — 6.2
+//   showPopup, scan QR, clipboard                                   — 6.4
+//   disableVerticalSwipes, enableVerticalSwipes                     — 7.8
+//   requestFullscreen, exitFullscreen, isFullscreen, lockOrientation— 8.0
+//
+// Why fullscreen reads weirdly:
+//   requestFullscreen() reports failure async via the `fullscreenFailed`
+//   event (NOT a thrown exception). Some desktop clients also need a user
+//   gesture before they accept the request; we install a one-shot
+//   pointerdown retry as a fallback.
 
 "use client";
 
@@ -32,6 +40,7 @@ type WebAppLike = {
   setBackgroundColor?: (c: string) => void;
   onEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
   offEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
+  isVersionAtLeast?: (version: string) => boolean;
   platform?: string;
   version?: string;
 };
@@ -82,18 +91,9 @@ function loadSDK(): Promise<WebAppLike | null> {
   });
 }
 
-function tryFullscreen(wa: WebAppLike, source: string) {
-  if (wa.isFullscreen) return;
-  try {
-    wa.requestFullscreen?.();
-    if (process.env.NODE_ENV !== "production") {
-      console.debug(
-        `[TgInit] requestFullscreen() called (${source}); platform=${wa.platform} version=${wa.version}`,
-      );
-    }
-  } catch (e) {
-    console.warn(`[TgInit] requestFullscreen sync error (${source}):`, e);
-  }
+/** True if `wa.version` >= `min` (e.g. "8.0"). Conservative: false if SDK didn't expose isVersionAtLeast. */
+function supports(wa: WebAppLike, min: string): boolean {
+  return Boolean(wa.isVersionAtLeast && wa.isVersionAtLeast(min));
 }
 
 export function TgInit() {
@@ -109,36 +109,77 @@ export function TgInit() {
         return;
       }
 
+      if (process.env.NODE_ENV !== "production") {
+        console.debug(`[TgInit] platform=${wa.platform} version=${wa.version}`);
+      }
+
+      // 6.0 baseline — always available.
       try {
         wa.ready();
         wa.expand();
-        wa.disableVerticalSwipes?.();
-        wa.setHeaderColor?.("#FBF7F0");
-        wa.setBackgroundColor?.("#FBF7F0");
       } catch (e) {
-        console.warn("[TgInit] init threw:", e);
+        console.warn("[TgInit] ready/expand threw:", e);
       }
 
-      // Async fullscreen feedback — Telegram reports failure via events.
-      wa.onEvent?.("fullscreenChanged", () => {
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
+      // 6.1+: theme colors.
+      if (supports(wa, "6.1")) {
+        try {
+          wa.setHeaderColor?.("#FBF7F0");
+          wa.setBackgroundColor?.("#FBF7F0");
+        } catch (e) {
+          console.warn("[TgInit] setHeader/BackgroundColor threw:", e);
         }
-      });
-      wa.onEvent?.("fullscreenFailed", (data) => {
-        console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
-      });
+      }
 
-      // First attempt right after init.
-      tryFullscreen(wa, "init");
+      // 7.8+: stop "swipe down to close" from firing while we scroll content.
+      if (supports(wa, "7.8")) {
+        try {
+          wa.disableVerticalSwipes?.();
+        } catch (e) {
+          console.warn("[TgInit] disableVerticalSwipes threw:", e);
+        }
+      }
 
-      // Some desktop clients reject fullscreen requests that aren't tied to a
-      // user gesture. Retry once on the first pointerdown so the next tap
-      // promotes the Mini App to true fullscreen automatically.
-      pointerListener = () => {
-        if (!wa.isFullscreen) tryFullscreen(wa, "first-gesture");
-      };
-      window.addEventListener("pointerdown", pointerListener, { once: true, capture: true });
+      // 8.0+: true fullscreen. Only attempt if the host supports it; older
+      // clients (e.g. the user's TDesktop reporting Bot API 6.0) keep the
+      // default panel size — the only way to grow that is to update Telegram.
+      if (supports(wa, "8.0")) {
+        wa.onEvent?.("fullscreenChanged", () => {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
+          }
+        });
+        wa.onEvent?.("fullscreenFailed", (data) => {
+          console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
+        });
+
+        const tryFs = (source: string) => {
+          if (wa.isFullscreen) return;
+          try {
+            wa.requestFullscreen?.();
+            if (process.env.NODE_ENV !== "production") {
+              console.debug(`[TgInit] requestFullscreen called (${source})`);
+            }
+          } catch (e) {
+            console.warn(`[TgInit] requestFullscreen sync error (${source}):`, e);
+          }
+        };
+
+        tryFs("init");
+
+        // Some desktop clients require a user gesture; retry on first pointerdown.
+        pointerListener = () => {
+          if (!wa.isFullscreen) tryFs("first-gesture");
+        };
+        window.addEventListener("pointerdown", pointerListener, {
+          once: true,
+          capture: true,
+        });
+      } else if (process.env.NODE_ENV !== "production") {
+        console.debug(
+          `[TgInit] fullscreen unavailable — host reports Bot API ${wa.version}, requires 8.0+. Update Telegram to expand beyond the default panel.`,
+        );
+      }
     });
 
     return () => {
