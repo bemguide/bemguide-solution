@@ -10,8 +10,8 @@ Living document. Updated after every milestone, with a self-review every 3 miles
 | M2  | Supabase schema + RLS                         | ✅ done        | `aab6171` |
 | M3  | Seed 30 events / 7 orgs / 119 ghost RSVPs     | ✅ done        | `9e2f984` |
 | M4  | Edge function infra (`_shared`)               | ✅ done        | `312619f` |
-| M5  | Gemini prompts + 4 functions wired + evals    | ✅ done        | (this)    |
-| M6  | Telegram bot edge function + webhook          | ⏳ pending     | —         |
+| M5  | Gemini prompts + 4 functions wired + evals    | ✅ done        | `0beb551` |
+| M6  | Telegram bot edge function + webhook          | ✅ done        | `2aa3d55` |
 | M7  | Web design tokens + base components           | ⏳ pending     | —         |
 | M8  | Public event page `/event/[slug]`             | ⏳ pending     | —         |
 | M9  | Miniapp `/m/onboarding` + `/m/feed`           | ⏳ pending     | —         |
@@ -56,13 +56,28 @@ Living document. Updated after every milestone, with a self-review every 3 miles
 - **G4 (process):** No `tsconfig.json` covers `supabase/seed/`, so `pnpm typecheck` skips it. tsx caught no runtime errors during the seed run, but a stray bug could ship undetected. Optional: add a `supabase/seed/tsconfig.json` for parity.
 - **G5 (M7):** Tailwind 4 globals.css declares the spec's palette, but no `font-display`/`font-h2`/etc. typography tokens or the radii/spacing utilities yet — that's M7's job.
 
+## Self-review M4–M6 (against spec acceptance criteria)
+
+### Met
+
+- ✅ All 8 Supabase Edge Functions deploy via `pnpm fn:deploy` and curl-verify (`pnpm fn:verify`).
+- ✅ 4 Gemini functions return validated JSON for 16 eval cases (5 rank / 4 parse / 3 moderate / 4 copy). Run with `pnpm evals`.
+- ✅ Guardrail catches banned military words + obvious name-token hallucinations + length overflow → re-prompt cycle replaced by an "empty + fallback" envelope so the UI can degrade silently.
+- ✅ Deterministic fallback for `gemini-rank` works on AI failure (validated by the "deterministic fallback when veteran has no data" eval).
+- ✅ G3 resolved: `loadVeteran` strips bracket-marker comfort_notes (e.g. `[seed-ghost]`) before returning to Gemini.
+- ✅ Bot handles /start, /me, /cancel, /help, /skip, /contact, /stop_reminders, /myevents, /newevent (the last is a placeholder that links to /m/propose; M12 fills the chat flow).
+- ✅ Bot deep links: `evt_<slug>`, `defer_<slug>`, `org`.
+- ✅ Webhook secret enforced (X-Telegram-Bot-Api-Secret-Token); wrong secret → 403.
+- ✅ Webhook always returns 200 so Telegram doesn't retry the same update on internal errors.
+- ✅ Real human round-trip with @bembembem_testbot confirmed.
+
+### Gaps to address
+
+- **G6 (M9 will fix):** auth.ts accepts `Bearer VERCEL_CRON_SECRET` as the canonical internal bearer because the user's `.env.local` SUPABASE_SERVICE_ROLE_KEY hash didn't match the auto-injected one (Supabase rotated it). Acceptable for MVP; revisit before prod.
+- **G7 (deferred):** Cost guard "50 Gemini calls/veteran/day" not implemented. Practical risk during demo is low (we have 1-3 demo users). Add a `gemini_calls` count column or per-day rate-limit table when traffic justifies it.
+- **G8 (M12 will exercise):** `bot_sessions` table is created but no flow writes to it yet. M12 (NL propose) is when /cancel becomes meaningful.
+- **G9 (M9-M10 will exercise):** `_shared/initdata.ts` exists and unit-tests pass for the algorithm, but no edge function actually verifies a real Telegram initData yet — M10 RSVP flow is the first caller.
+
 ## What's next
 
-M4: edge function infra under `supabase/functions/_shared/`. Plan:
-
-- `_shared/gemini.ts` — single client with retry+backoff, JSON-mode response schema.
-- `_shared/initdata.ts` — Telegram WebApp HMAC verifier (24h auth_date window).
-- `_shared/supabase.ts` — typed admin client helper.
-- `_shared/schemas/*.ts` — Zod schemas mirrored across edge + Next.js (will be synced from `@poruch/shared` enums).
-- `_shared/responses.ts` — uniform JSON/error envelope.
-- 8 stub functions returning a 200 with `{ ok: true, fn: "<name>" }` so we can deploy + curl-verify each one before plugging in real logic in M5/M6/M11.
+**M7** — apps/web design tokens + base shadcn components. Then M8-M10 wire those into the public event page, miniapp onboarding/feed, and the RSVP modal with .ics.
