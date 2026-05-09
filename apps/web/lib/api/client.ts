@@ -1,6 +1,11 @@
 // fetch wrapper for the v2 backend API. Handles three jobs that pages
 // shouldn't have to worry about:
 //
+// Dev logging: every request + response is `console.debug`'d in
+// non-production. The request side prints method/path/body; the
+// response prints status/body. Sensitive fields (init_data, token)
+// are redacted.
+//
 //   1. **Token persistence.** localStorage, keyed by `poruch.v2.token` +
 //      `poruch.v2.token_expires_at`. Backend default TTL is 24h, no
 //      refresh — when the token nears expiry we re-exchange initData.
@@ -167,6 +172,8 @@ async function rawAuthExchange(initData: string): Promise<AuthExchangeResponse> 
     throw new ApiError(0, "NEXT_PUBLIC_API_BASE is not set");
   }
   const url = `${API_BASE.replace(/\/$/, "")}${AUTH_PATH}`;
+  const startedAt = performance.now();
+  devLog("→", "POST", AUTH_PATH, { init_data: redactInitData(initData) });
   const res = await fetch(url, {
     method: "POST",
     headers: {
@@ -182,6 +189,13 @@ async function rawAuthExchange(initData: string): Promise<AuthExchangeResponse> 
   } catch {
     parsed = text;
   }
+  devLog(
+    "←",
+    "POST",
+    AUTH_PATH,
+    `${res.status} ${Math.round(performance.now() - startedAt)}ms`,
+    redactAuthResponse(parsed),
+  );
   if (!res.ok) {
     const code =
       typeof parsed === "object" && parsed && "error" in parsed
@@ -301,14 +315,16 @@ type RequestOpts = {
 
 async function doFetch(path: string, opts: RequestOpts): Promise<Response> {
   const url = `${API_BASE.replace(/\/$/, "")}${path}`;
+  const method = opts.method ?? (opts.body !== undefined ? "POST" : "GET");
   const headers: Record<string, string> = { accept: "application/json" };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.authed !== false) {
     const token = getToken();
     if (token) headers.authorization = `Bearer ${token}`;
   }
+  devLog("→", method, path, opts.body !== undefined ? opts.body : undefined);
   return fetch(url, {
-    method: opts.method ?? (opts.body !== undefined ? "POST" : "GET"),
+    method,
     headers,
     body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     signal: opts.signal,
@@ -326,6 +342,8 @@ export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise
     await ensureAuth();
   }
 
+  const method = opts.method ?? (opts.body !== undefined ? "POST" : "GET");
+  const startedAt = performance.now();
   let res = await doFetch(path, opts);
 
   // Self-heal one 401 — Telegram may have rotated initData, our clock
@@ -348,6 +366,7 @@ export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise
   } catch {
     parsed = text;
   }
+  devLog("←", method, path, `${res.status} ${Math.round(performance.now() - startedAt)}ms`, parsed);
   if (!res.ok) {
     const code =
       typeof parsed === "object" && parsed && "error" in parsed
@@ -356,4 +375,37 @@ export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise
     throw new ApiError(res.status, code ?? `HTTP ${res.status}`, parsed);
   }
   return parsed as T;
+}
+
+// ---------------------------------------------------------------
+// Dev logging
+// ---------------------------------------------------------------
+
+/**
+ * `console.debug` only in non-production. The browser's Network tab
+ * already shows full request bodies; this helper exists to put a
+ * grep-friendly trail in the JS console so you can tell at a glance
+ * which call returned what without leaving the page.
+ */
+function devLog(...args: unknown[]): void {
+  if (process.env.NODE_ENV === "production") return;
+  console.debug("[api]", ...args);
+}
+
+/** Don't log the raw initData — it's a signed payload tied to a TG account. */
+function redactInitData(initData: string): string {
+  return `<initData ${initData.length}b>`;
+}
+
+/** Don't log the JWT payload either; show prefix + length only. */
+function redactAuthResponse(body: unknown): unknown {
+  if (typeof body !== "object" || body === null) return body;
+  const b = body as { token?: unknown; user?: unknown; expires_at?: unknown };
+  if (typeof b.token === "string") {
+    return {
+      ...body,
+      token: `${b.token.slice(0, 14)}…(${b.token.length}b)`,
+    };
+  }
+  return body;
 }

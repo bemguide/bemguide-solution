@@ -42,6 +42,9 @@ const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   Рівне: { lat: 50.6199, lng: 26.2516 },
 };
 
+/** Demo restriction: only Дніпро is wired end-to-end against the seed. */
+const ENABLED_CITY = "Дніпро";
+
 type FormState = {
   title: string;
   description: string;
@@ -58,7 +61,7 @@ type FormState = {
 };
 
 const DEFAULT_DURATION = 90;
-const DEFAULT_CITY = "Київ";
+const DEFAULT_CITY = ENABLED_CITY;
 
 export function ProposeFlow() {
   const router = useRouter();
@@ -223,26 +226,37 @@ export function ProposeFlow() {
             <Label htmlFor="city">Місто</Label>
             <div className="flex flex-wrap gap-2">
               {DEMO_CITIES.map((c) => {
+                const enabled = c === ENABLED_CITY;
                 const active = form.city === c;
                 return (
                   <button
                     key={c}
                     type="button"
-                    onClick={() => setForm((f) => ({ ...f, city: c }))}
+                    onClick={() => enabled && setForm((f) => ({ ...f, city: c }))}
+                    disabled={!enabled}
+                    aria-pressed={active}
                     className={cn(
                       "inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm transition",
                       active
                         ? "border-primary bg-accent text-primary"
                         : "border-border bg-card text-foreground hover:border-primary/40",
+                      !enabled && "cursor-not-allowed opacity-50",
                     )}
-                    aria-pressed={active}
                   >
                     <MapPin className="h-3.5 w-3.5" aria-hidden />
                     {c}
+                    {!enabled ? (
+                      <span className="text-muted-foreground/80 ml-1 text-xs font-normal lowercase">
+                        · скоро
+                      </span>
+                    ) : null}
                   </button>
                 );
               })}
             </div>
+            <p className="text-muted-foreground text-xs">
+              Зараз приймаємо події тільки в Дніпрі.
+            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="address">Адреса (необов'язково)</Label>

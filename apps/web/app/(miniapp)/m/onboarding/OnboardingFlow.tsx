@@ -73,6 +73,15 @@ import {
 } from "./options";
 
 const TOTAL_STEPS = 12;
+
+/**
+ * Demo restriction: backend seed data only covers Дніпро for now, so
+ * we expose Дніпро as the single working option and visually disable
+ * the rest. Other Demo cities stay on screen as "soon" placeholders
+ * so users see the surface that's coming, without being able to pick
+ * one and end up on an empty feed.
+ */
+const ENABLED_CITY = "Дніпро";
 type StepIndex =
   | 0
   | 1
@@ -130,7 +139,9 @@ type FormState = {
 };
 
 const initialState: FormState = {
-  city: "",
+  // Pre-selected because every other chip is disabled — saves the
+  // user a tap on Step 1.
+  city: ENABLED_CITY,
   displayName: "",
   showNamePublicly: false,
   interests: [],
@@ -637,21 +648,34 @@ function CityStep({
         onValueChange={(v) => v && onChange(v)}
         className="flex flex-wrap"
       >
-        {NEAREST_CITIES.map((c) => (
-          <ToggleGroupItem
-            key={c}
-            value={c}
-            variant="outline"
-            className={chipItemClasses}
-            aria-label={c}
-          >
-            <MapPin className="h-3.5 w-3.5" aria-hidden />
-            {c}
-          </ToggleGroupItem>
-        ))}
+        {NEAREST_CITIES.map((c) => {
+          const enabled = c === ENABLED_CITY;
+          return (
+            <ToggleGroupItem
+              key={c}
+              value={c}
+              variant="outline"
+              disabled={!enabled}
+              className={chipItemClasses}
+              aria-label={enabled ? c : `${c} (поки що недоступно)`}
+            >
+              <MapPin className="h-3.5 w-3.5" aria-hidden />
+              {c}
+              {!enabled ? (
+                <span className="text-muted-foreground/80 ml-1 text-xs font-normal lowercase">
+                  · скоро
+                </span>
+              ) : null}
+            </ToggleGroupItem>
+          );
+        })}
       </ToggleGroup>
 
-      <div className="relative">
+      <p className="text-muted-foreground text-xs">
+        Зараз працюємо в Дніпрі. Інші міста — найближчим часом.
+      </p>
+
+      <div className="relative opacity-60">
         <MapPin
           className="text-muted-foreground pointer-events-none absolute left-3.5 top-1/2 h-4.5 w-4.5 -translate-y-1/2"
           aria-hidden
@@ -660,16 +684,19 @@ function CityStep({
           type="text"
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="інше місто"
+          placeholder="інше місто (скоро)"
           autoComplete="address-level2"
           className="h-11 rounded-xl border bg-card pl-10 pr-10"
           aria-label="Місто"
+          disabled
+          readOnly
         />
         {value ? (
           <button
             type="button"
             onClick={() => onChange("")}
-            className="text-muted-foreground hover:bg-muted absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full"
+            disabled
+            className="text-muted-foreground hover:bg-muted absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full disabled:opacity-50"
             aria-label="Очистити"
             style={{ touchAction: "manipulation" }}
           >
@@ -681,12 +708,12 @@ function CityStep({
       <button
         type="button"
         onClick={onDetect}
-        disabled={locating}
-        className="text-primary inline-flex items-center gap-1.5 rounded-md py-1.5 text-sm font-medium underline-offset-2 hover:underline disabled:opacity-60"
+        disabled
+        className="text-muted-foreground inline-flex cursor-not-allowed items-center gap-1.5 rounded-md py-1.5 text-sm font-medium opacity-60"
         style={{ touchAction: "manipulation" }}
       >
         <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} aria-hidden />
-        {locating ? "Шукаю…" : "Визначити автоматично"}
+        Визначити автоматично · скоро
       </button>
       <LocateError error={locateError} onOpenSettings={onOpenSettings} />
     </div>
