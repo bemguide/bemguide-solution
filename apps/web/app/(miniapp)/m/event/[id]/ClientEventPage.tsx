@@ -13,19 +13,36 @@ import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
 import {
+  ApiError,
   describeError,
   getOpportunity,
   getOpportunityAttendees,
+  getRoom,
   type AttendeeSummary,
   type OpportunityCard,
+  type V2EventRoom,
 } from "@/lib/api";
 import { useTelegramBackButton } from "@/lib/telegram/back-button";
 import { EventActions } from "./EventActions";
 
+type Attending =
+  /** GET /opportunities/:id/room hasn't resolved yet. */
+  | { kind: "loading" }
+  /** Backend said 403 not_attendee — render the RSVP CTA. */
+  | { kind: "no" }
+  /** User is in event_attendees. `room` is null when the worker hasn't
+   *  provisioned the chat yet (we'll keep showing "Чат готується…"). */
+  | { kind: "yes"; room: V2EventRoom | null };
+
 type LoadState =
   | { kind: "loading" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; event: OpportunityCard; attendees: AttendeeSummary };
+  | {
+      kind: "ready";
+      event: OpportunityCard;
+      attendees: AttendeeSummary;
+      attending: Attending;
+    };
 
 export function ClientEventPage({ id }: { id: string }) {
   const router = useRouter();
@@ -42,13 +59,27 @@ export function ClientEventPage({ id }: { id: string }) {
     async function load() {
       try {
         // apiFetch auto-exchanges initData and self-heals 401, so no
-        // explicit auth dance here.
-        const [event, attendees] = await Promise.all([
+        // explicit auth dance here. Three calls fire in parallel:
+        //   1. event itself (public)
+        //   2. attendee count + names
+        //   3. room — RLS gives 403 to non-attendees, 200 to attendees.
+        //      That's our "is the user already signed up?" probe.
+        const [event, attendees, attendingResult] = await Promise.all([
           getOpportunity(id),
           getOpportunityAttendees(id),
+          getRoom(id)
+            .then<Attending>((room) => ({ kind: "yes", room }))
+            .catch<Attending>((e: unknown) => {
+              if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
+                return { kind: "no" };
+              }
+              // Any other error (5xx, network) — assume not attending so
+              // the RSVP CTA is reachable; user can still sign up.
+              return { kind: "no" };
+            }),
         ]);
         if (cancelled) return;
-        setState({ kind: "ready", event, attendees });
+        setState({ kind: "ready", event, attendees, attending: attendingResult });
       } catch (e) {
         if (cancelled) return;
         setState({ kind: "error", message: describeError(e) });
@@ -84,8 +115,17 @@ export function ClientEventPage({ id }: { id: string }) {
     );
   }
 
-  const { event, attendees } = state;
+  const { event, attendees, attending } = state;
   const startDisplay = event.start_at ?? "";
+
+  function setAttendingRoom(room: V2EventRoom | null) {
+    setState((s) =>
+      s.kind === "ready" ? { ...s, attending: { kind: "yes", room } } : s,
+    );
+  }
+  function setNotAttending() {
+    setState((s) => (s.kind === "ready" ? { ...s, attending: { kind: "no" } } : s));
+  }
 
   return (
     <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
@@ -179,6 +219,11 @@ export function ClientEventPage({ id }: { id: string }) {
         eventTitle={event.title}
         eventStartAt={startDisplay}
         startedAlready={startedAlready(event.start_at)}
+        attending={attending}
+        onAttendingChange={(next) => {
+          if (next.kind === "yes") setAttendingRoom(next.room);
+          else setNotAttending();
+        }}
       />
     </main>
   );
@@ -189,3 +234,5 @@ function startedAlready(startAt: string | null): boolean {
   const t = Date.parse(startAt);
   return !Number.isNaN(t) && t < Date.now();
 }
+
+export type { Attending };
