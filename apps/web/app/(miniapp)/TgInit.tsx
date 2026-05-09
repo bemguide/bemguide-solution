@@ -1,32 +1,39 @@
-// Boots the Telegram WebApp SDK once on mount.
+// Boots the Telegram WebApp SDK once on mount and keeps the Mini App in
+// fullscreen mode whenever the host client supports it (Bot API 8.0+).
 //
-// Why imperative loading instead of <Script strategy="...">:
-//   Both `beforeInteractive` and `afterInteractive` produced symptoms in real
-//   TMA + Next 16 + Turbopack dev: the browser saw the <link rel=preload> but
-//   the matching <script> tag was injected too late (or not at all). Result:
-//   window.Telegram.WebApp never landed, ready() was never called, Telegram
-//   left its OWN loading placeholder on top of our page, and every tap was
-//   eaten by the placeholder.
+// Why imperative SDK loading instead of <Script strategy="...">:
+//   In Next 16 + Turbopack dev, both beforeInteractive and afterInteractive
+//   left the script as a "preloaded but never used" link, so window.Telegram
+//   .WebApp never landed → ready() was never called → Telegram kept its
+//   loading placeholder on top of our app → every tap was eaten by it.
 //
-// We now:
-//   1. Reuse the SDK if Telegram already injected it (most TMA clients do).
-//   2. Otherwise inject our own <script> with onload/onerror + a 3s poll fallback.
-//   3. As soon as Telegram.WebApp appears, call ready / expand / requestFullscreen
-//      / disableVerticalSwipes / set{Header,Background}Color.
+// Why fullscreen needs special handling:
+//   requestFullscreen() reports failure asynchronously via a `fullscreenFailed`
+//   event, NOT by throwing. A try/catch around the call won't catch it. Some
+//   desktop clients also require a user gesture before allowing fullscreen, so
+//   we install a one-shot listener on first pointerdown that retries.
 
 "use client";
 
 import { useEffect } from "react";
 
+type FullscreenFailedData = { error?: string };
+
 type WebAppLike = {
   ready: () => void;
   expand: () => void;
   isFullscreen?: boolean;
+  isExpanded?: boolean;
   requestFullscreen?: () => void;
+  exitFullscreen?: () => void;
   disableVerticalSwipes?: () => void;
   enableClosingConfirmation?: () => void;
   setHeaderColor?: (c: string) => void;
   setBackgroundColor?: (c: string) => void;
+  onEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
+  offEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
+  platform?: string;
+  version?: string;
 };
 
 const SDK_URL = "https://telegram.org/js/telegram-web-app.js";
@@ -43,8 +50,6 @@ function loadSDK(): Promise<WebAppLike | null> {
     const direct = getWebApp();
     if (direct) return resolve(direct);
 
-    // Reuse an existing tag if one is already in the page (e.g. injected by
-    // an earlier mount or by a previous Next.js layout pass).
     let tag = document.querySelector<HTMLScriptElement>('script[src*="telegram-web-app"]');
     if (!tag) {
       tag = document.createElement("script");
@@ -63,8 +68,6 @@ function loadSDK(): Promise<WebAppLike | null> {
     tag.addEventListener("load", () => finish(getWebApp()));
     tag.addEventListener("error", () => finish(null));
 
-    // Some clients have already-evaluated the script before our listener;
-    // poll briefly to catch them. 3s is plenty.
     let attempts = 0;
     const tick = () => {
       const wa = getWebApp();
@@ -79,9 +82,25 @@ function loadSDK(): Promise<WebAppLike | null> {
   });
 }
 
+function tryFullscreen(wa: WebAppLike, source: string) {
+  if (wa.isFullscreen) return;
+  try {
+    wa.requestFullscreen?.();
+    if (process.env.NODE_ENV !== "production") {
+      console.debug(
+        `[TgInit] requestFullscreen() called (${source}); platform=${wa.platform} version=${wa.version}`,
+      );
+    }
+  } catch (e) {
+    console.warn(`[TgInit] requestFullscreen sync error (${source}):`, e);
+  }
+}
+
 export function TgInit() {
   useEffect(() => {
     let cancelled = false;
+    let pointerListener: ((e: Event) => void) | null = null;
+
     loadSDK().then((wa) => {
       if (cancelled || !wa) {
         if (!wa && process.env.NODE_ENV !== "production") {
@@ -89,26 +108,44 @@ export function TgInit() {
         }
         return;
       }
+
       try {
         wa.ready();
         wa.expand();
-        // Bot API 8.0+: true fullscreen. Older clients silently lack the method
-        // or throw FULLSCREEN_FAILED — both are fine, expand() already gave us
-        // the maximum vertical area.
-        try {
-          wa.requestFullscreen?.();
-        } catch {
-          /* unsupported — keep expand()'s result */
-        }
         wa.disableVerticalSwipes?.();
         wa.setHeaderColor?.("#FBF7F0");
         wa.setBackgroundColor?.("#FBF7F0");
       } catch (e) {
         console.warn("[TgInit] init threw:", e);
       }
+
+      // Async fullscreen feedback — Telegram reports failure via events.
+      wa.onEvent?.("fullscreenChanged", () => {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
+        }
+      });
+      wa.onEvent?.("fullscreenFailed", (data) => {
+        console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
+      });
+
+      // First attempt right after init.
+      tryFullscreen(wa, "init");
+
+      // Some desktop clients reject fullscreen requests that aren't tied to a
+      // user gesture. Retry once on the first pointerdown so the next tap
+      // promotes the Mini App to true fullscreen automatically.
+      pointerListener = () => {
+        if (!wa.isFullscreen) tryFullscreen(wa, "first-gesture");
+      };
+      window.addEventListener("pointerdown", pointerListener, { once: true, capture: true });
     });
+
     return () => {
       cancelled = true;
+      if (pointerListener) {
+        window.removeEventListener("pointerdown", pointerListener, { capture: true });
+      }
     };
   }, []);
 
