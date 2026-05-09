@@ -27,12 +27,18 @@ docs/PROMPTS/     Source-of-truth specs for each subsystem
 ```bash
 pnpm install
 cp .env.example .env.local           # fill in real values
-pnpm db:link                          # link to Supabase project
-pnpm db:push                          # apply migrations
-pnpm seed                             # populate events + ghost RSVPs
-pnpm fn:deploy                        # deploy Supabase edge functions
+
+#1st terminal
 pnpm dev                              # start Next.js
+
+#2nd terminal 
+ngrok http 3000
+
+#then we wire up the ngrok's link into FE env vars NEXT_PUBLIC_APP_URL=ngrok_url and updating the bot with the correct url
 ```
+<img width="426" height="424" alt="image" src="https://github.com/user-attachments/assets/f4d627e4-0c95-4e1a-8f87-0f65ae4b9bd4" />
+
+<img width="450" height="619" alt="image" src="https://github.com/user-attachments/assets/ffdfac34-af8c-4537-9b81-1bb6bf663e59" />
 
 ## Scripts
 
