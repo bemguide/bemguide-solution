@@ -102,21 +102,22 @@ export default function HomePage() {
 }
 
 function DecidingScreen() {
+  // Native-app splash: just the wordmark, vertically centered. No
+  // spinner, no copy. The decide() effect resolves in 200–500ms in
+  // the happy path; anything beyond that is a backend issue and we
+  // fall through to ErrorScreen.
   return (
     <main
-      className="bg-background mx-auto flex w-full max-w-md flex-col items-center justify-center gap-4"
+      className="bg-background mx-auto flex w-full max-w-md flex-col items-center justify-center"
       style={{
         minHeight: "var(--tg-viewport-stable-height, 100dvh)",
         paddingTop: "var(--tg-safe-area-inset-top, 0px)",
         paddingBottom: "var(--tg-safe-area-inset-bottom, 0px)",
       }}
-      aria-label="Завантажуємо…"
       aria-busy
+      aria-label="Поруч"
     >
-      <div className="bg-primary text-primary-foreground flex h-14 w-14 items-center justify-center rounded-full text-2xl font-semibold">
-        П
-      </div>
-      <p className="text-muted-foreground text-sm">Готую поруч…</p>
+      <h1 className="text-foreground text-4xl font-semibold tracking-tight">Поруч</h1>
     </main>
   );
 }

@@ -65,15 +65,16 @@ export function MeClient() {
   }, []);
 
   if (refreshing && !me) {
+    // Quiet shell during the first /me round-trip — header with a
+    // small spinner, body empty. Same pattern the feed uses.
     return (
-      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 pt-4">
-        <div className="bg-muted h-7 w-32 animate-pulse rounded" />
-        <div className="bg-card border-border h-32 w-full animate-pulse rounded-2xl border" />
-        <div className="bg-muted h-5 w-40 animate-pulse rounded" />
-        <div className="space-y-2">
-          <div className="bg-card border-border h-20 w-full animate-pulse rounded-xl border" />
-          <div className="bg-card border-border h-20 w-full animate-pulse rounded-xl border" />
-        </div>
+      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-4">
+        <header className="flex items-center justify-between">
+          <h1 className="text-foreground inline-flex items-center gap-2 text-xl font-semibold">
+            Я
+            <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
+          </h1>
+        </header>
       </main>
     );
   }
