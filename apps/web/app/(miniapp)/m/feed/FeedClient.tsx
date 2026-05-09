@@ -88,7 +88,7 @@ export function FeedClient() {
     sections.try_new.length === 0;
 
   return (
-    <main className="flex flex-1 flex-col gap-6 px-4 pb-24 pt-4">
+    <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-24 pt-4">
       <header className="flex items-center justify-between">
         <h1 className="text-foreground text-xl font-semibold">Поруч{city ? ` · ${city}` : ""}</h1>
         <Link

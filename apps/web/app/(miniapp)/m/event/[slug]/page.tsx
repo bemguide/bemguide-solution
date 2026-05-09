@@ -34,7 +34,7 @@ export default async function MiniappEventPage({ params }: { params: Promise<{ s
   const rsvp = await getPublicRsvpCount(event.id);
 
   return (
-    <main className="bg-background flex flex-1 flex-col pb-32">
+    <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
       <div className="relative aspect-[16/10] w-full overflow-hidden">
         {event.photo_url ? (
           <Image

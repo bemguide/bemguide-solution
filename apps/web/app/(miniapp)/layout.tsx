@@ -14,7 +14,17 @@ export default function MiniappLayout({ children }: { children: React.ReactNode 
     <>
       <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
       <TgInit />
-      <div className="bg-background mx-auto flex min-h-screen w-full max-w-md flex-col">
+      {/*
+        Layout is exactly one TMA viewport tall — fall back to 100dvh outside Telegram.
+        overflow-hidden so children control their own scroll surfaces; keeps the iOS
+        rubber-band scroll from bouncing the whole shell when only one section needs scroll.
+      */}
+      <div
+        className="bg-background mx-auto flex w-full max-w-md flex-col overflow-hidden"
+        style={{
+          height: "var(--tg-viewport-stable-height, 100dvh)",
+        }}
+      >
         {children}
       </div>
     </>
