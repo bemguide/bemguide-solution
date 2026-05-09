@@ -21,10 +21,17 @@ export interface FeedResponse {
   try_new: OpportunityCard[];
 }
 
-const FEED_TOP_N = 30;
-const NAMES_VISIBLE_MAX = 6;
 const TODAY_TOMORROW_HOURS = 36;
 const THIS_WEEK_HOURS = 168;
+const TODAY_TOMORROW_LIMIT = 10;
+const THIS_WEEK_LIMIT = 10;
+const TRY_NEW_LIMIT = 2;
+// Overfetch for try_new — we filter out interest-overlap candidates in JS,
+// and a user whose interests align with a busy tag (e.g. 'sport' covers ~32
+// opportunities here) can saturate the head of the pool. Sized so we still
+// surface non-overlap candidates after a long overlap prefix.
+const TRY_NEW_OVERFETCH = 50;
+const NAMES_VISIBLE_MAX = 6;
 
 interface MatchRow {
   event_id: string;
@@ -32,65 +39,94 @@ interface MatchRow {
   opportunities: OpportunityRow | null;
 }
 
+// Three buckets, three parallel queries. Replaces a single
+// "top 30 by score then bucket in JS" pass. The single-query variant let
+// strong-match users in one tier crowd out the time-urgent buckets — e.g. a
+// user whose only bonus interest matched a large service cluster had every
+// slot filled by undated services and saw nothing in today/this_week.
 export async function buildFeed(userId: string, cityFilter?: string): Promise<FeedResponse> {
   const user = await getById(userId);
   if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
 
   const effectiveCity = cityFilter ?? user.city ?? null;
 
-  // 1) Pull personalised candidates from event_matches.
-  let query = supabaseAdmin
-    .from('event_matches')
-    .select('event_id, score, opportunities!inner(*)')
-    .eq('user_id', userId)
-    .gt('score', 0)
-    .order('score', { ascending: false })
-    .order('event_id', { ascending: true })
-    .limit(FEED_TOP_N);
+  const now = new Date();
+  const wallNow = toWallClockUtc(now);
+  const wallTodayTomorrowEnd = toWallClockUtc(
+    new Date(now.getTime() + TODAY_TOMORROW_HOURS * 3600 * 1000),
+  );
+  const wallThisWeekEnd = toWallClockUtc(new Date(now.getTime() + THIS_WEEK_HOURS * 3600 * 1000));
 
-  if (effectiveCity) {
-    // Filter on the joined opportunities.city — `opportunities!inner` makes it
-    // a real INNER JOIN so this filter actually applies.
-    query = query.eq('opportunities.city', effectiveCity);
-  }
+  // Each bucket starts from the same base shape and differs only in the
+  // start_at filter and limit. Defining baseQuery as a thunk so each call gets
+  // a fresh chainable builder.
+  const baseQuery = () => {
+    let q = supabaseAdmin
+      .from('event_matches')
+      .select('event_id, score, opportunities!inner(*)')
+      .eq('user_id', userId)
+      .gt('score', 0);
+    if (effectiveCity) q = q.eq('opportunities.city', effectiveCity);
+    return q;
+  };
 
-  const { data: matchRowsData, error: matchErr } = await query;
-  if (matchErr) throw AppError.upstream('Failed to load feed candidates', matchErr.message);
-  const matchRows = (matchRowsData ?? []) as unknown as MatchRow[];
+  const [todayTomorrowResp, thisWeekResp, laterResp] = await Promise.all([
+    baseQuery()
+      .gte('opportunities.start_at', wallNow)
+      .lt('opportunities.start_at', wallTodayTomorrowEnd)
+      .order('score', { ascending: false })
+      .order('event_id', { ascending: true })
+      .limit(TODAY_TOMORROW_LIMIT),
+    baseQuery()
+      .gte('opportunities.start_at', wallTodayTomorrowEnd)
+      .lt('opportunities.start_at', wallThisWeekEnd)
+      .order('score', { ascending: false })
+      .order('event_id', { ascending: true })
+      .limit(THIS_WEEK_LIMIT),
+    // "later" pool feeds try_new. Includes both far-future events and undated
+    // services (start_at is null). Filter foreign-table column via .or() —
+    // PostgREST passes the expression through to the joined opportunities row.
+    baseQuery()
+      .or(`start_at.is.null,start_at.gte.${wallThisWeekEnd}`, {
+        foreignTable: 'opportunities',
+      })
+      .order('score', { ascending: false })
+      .order('event_id', { ascending: true })
+      .limit(TRY_NEW_OVERFETCH),
+  ]);
 
-  const opportunities = matchRows
-    .map((m) => m.opportunities)
+  if (todayTomorrowResp.error)
+    throw AppError.upstream('Failed to load today_tomorrow feed', todayTomorrowResp.error.message);
+  if (thisWeekResp.error)
+    throw AppError.upstream('Failed to load this_week feed', thisWeekResp.error.message);
+  if (laterResp.error)
+    throw AppError.upstream('Failed to load later feed pool', laterResp.error.message);
+
+  const todayTomorrowRows = (todayTomorrowResp.data ?? []) as unknown as MatchRow[];
+  const thisWeekRows = (thisWeekResp.data ?? []) as unknown as MatchRow[];
+  const laterRows = (laterResp.data ?? []) as unknown as MatchRow[];
+
+  const todayTomorrow = todayTomorrowRows
+    .map((r) => r.opportunities)
+    .filter((o): o is OpportunityRow => o !== null);
+  const thisWeek = thisWeekRows
+    .map((r) => r.opportunities)
     .filter((o): o is OpportunityRow => o !== null);
 
-  // 2) Bucket by start_at proximity.
-  const now = Date.now();
-  const todayTomorrowCut = now + TODAY_TOMORROW_HOURS * 3600 * 1000;
-  const thisWeekCut = now + THIS_WEEK_HOURS * 3600 * 1000;
-
-  const todayTomorrow: OpportunityRow[] = [];
-  const thisWeek: OpportunityRow[] = [];
-  const later: OpportunityRow[] = [];
-
-  for (const o of opportunities) {
-    if (!o.start_at) {
-      later.push(o);
-      continue;
-    }
-    // start_at is wall-clock UTC string (no tz); treat as UTC for bucket math.
-    const ts = parseWallClockUtc(o.start_at);
-    if (ts < now) continue; // ignore past events
-    if (ts <= todayTomorrowCut) todayTomorrow.push(o);
-    else if (ts <= thisWeekCut) thisWeek.push(o);
-    else later.push(o);
-  }
-
-  // 3) "try_new" — top 1–2 from `later` whose interests don't overlap the user's.
+  // try_new: from the "later" pool, keep only those whose interests don't
+  // overlap the user's, top TRY_NEW_LIMIT by the order already imposed by SQL.
   const userInterests = new Set(user.interests ?? []);
-  const tryNew = later.filter((o) => !o.interests.some((i) => userInterests.has(i))).slice(0, 2);
+  const tryNew = laterRows
+    .map((r) => r.opportunities)
+    .filter((o): o is OpportunityRow => o !== null)
+    .filter((o) => !o.interests.some((i) => userInterests.has(i)))
+    .slice(0, TRY_NEW_LIMIT);
 
-  // 4) Decorate every opportunity we'll return.
+  // Decorate every opportunity we'll return. matchRows must include all three
+  // buckets so match_score lookup hits for any visible card.
   const visible = [...todayTomorrow, ...thisWeek, ...tryNew];
-  const decorations = await decorate(visible, matchRows, user);
+  const allMatchRows = [...todayTomorrowRows, ...thisWeekRows, ...laterRows];
+  const decorations = await decorate(visible, allMatchRows, user);
 
   // 5) AI reasons (best-effort; errors → empty map, decorate() defaults to '').
   const aiReasons = await generateAiReasons(
@@ -187,10 +223,9 @@ async function decorate(
   return out;
 }
 
-// opportunities.start_at is timestamp without tz — Supabase returns it as
-// 'YYYY-MM-DDTHH:mm:ss[.SSS]' with no offset. Treat the wall-clock as UTC
-// for bucket math (matching how we wrote it; tz adjustment is a presentation
-// concern handled in serializeOpportunityTimes).
-function parseWallClockUtc(s: string): number {
-  return Date.parse(s.endsWith('Z') ? s : `${s}Z`);
+// opportunities.start_at is timestamp without tz, written as wall-clock UTC.
+// Format a JS Date into the same shape so PostgREST `gte`/`lt`/`or` filters
+// compare apples-to-apples. Output: "YYYY-MM-DDTHH:mm:ss" (no offset, no Z).
+function toWallClockUtc(d: Date): string {
+  return d.toISOString().slice(0, 19);
 }
