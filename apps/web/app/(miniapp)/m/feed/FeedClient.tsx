@@ -120,8 +120,8 @@ export function FeedClient() {
         <section className="space-y-3">
           <SectionHeader title="Сьогодні і завтра поруч" />
           <div className="space-y-3">
-            {sections.today_tomorrow.map((e) => (
-              <FeaturedEventCard key={e.id} event={e} surface="miniapp" />
+            {sections.today_tomorrow.map((e, i) => (
+              <FeaturedEventCard key={e.id} event={e} surface="miniapp" priority={i === 0} />
             ))}
           </div>
         </section>

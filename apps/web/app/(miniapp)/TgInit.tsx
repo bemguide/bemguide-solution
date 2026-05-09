@@ -114,50 +114,63 @@ export function TgInit() {
         return;
       }
 
+      const supports = (v: string) => Boolean(wa.isVersionAtLeast?.(v));
+
       if (process.env.NODE_ENV !== "production") {
-        console.debug(`[TgInit] platform=${wa.platform} botApi=${wa.version}`);
+        console.debug(
+          `[TgInit] platform=${wa.platform} botApi=${wa.version} (>=8.0:${supports("8.0")}, >=7.8:${supports("7.8")}, >=6.1:${supports("6.1")})`,
+        );
       }
 
-      // Baseline.
+      // 6.0 baseline — every host has these.
       callQuiet("ready", () => wa.ready());
       callQuiet("expand", () => wa.expand());
 
-      // Theme — 6.1+. Optional-chaining means missing methods are no-ops.
-      callQuiet("setHeaderColor", () => wa.setHeaderColor?.("#FBF7F0"));
-      callQuiet("setBackgroundColor", () => wa.setBackgroundColor?.("#FBF7F0"));
+      // Each modern API is gated by the host's reported Bot API version.
+      // Without gating, Telegram's SDK calls console.error("Method X is not
+      // supported in version Y") on every old client — purely noise that the
+      // user can do nothing about short of updating Telegram.
+      if (supports("6.1")) {
+        callQuiet("setHeaderColor", () => wa.setHeaderColor?.("#FBF7F0"));
+        callQuiet("setBackgroundColor", () => wa.setBackgroundColor?.("#FBF7F0"));
+      }
 
-      // 7.8+: stop "swipe down to close" mid-scroll.
-      callQuiet("disableVerticalSwipes", () => wa.disableVerticalSwipes?.());
+      if (supports("7.8")) {
+        callQuiet("disableVerticalSwipes", () => wa.disableVerticalSwipes?.());
+      }
 
-      // 8.0+: fullscreen + orientation lock. We attempt unconditionally; old
-      // clients emit a one-line warning per call but otherwise proceed fine.
-      wa.onEvent?.("fullscreenChanged", () => {
-        if (process.env.NODE_ENV !== "production") {
-          console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
-        }
-      });
-      wa.onEvent?.("fullscreenFailed", (data) => {
-        // UNSUPPORTED is expected on Bot API <8.0.
-        console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
-      });
+      if (supports("8.0")) {
+        wa.onEvent?.("fullscreenChanged", () => {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
+          }
+        });
+        wa.onEvent?.("fullscreenFailed", (data) => {
+          console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
+        });
 
-      const tryFs = (source: string) => {
-        if (wa.isFullscreen) return;
-        callQuiet(`requestFullscreen(${source})`, () => wa.requestFullscreen?.());
-        callQuiet(`lockOrientation(${source})`, () => wa.lockOrientation?.());
-      };
+        const tryFs = (source: string) => {
+          if (wa.isFullscreen) return;
+          callQuiet(`requestFullscreen(${source})`, () => wa.requestFullscreen?.());
+          callQuiet(`lockOrientation(${source})`, () => wa.lockOrientation?.());
+        };
 
-      tryFs("init");
+        tryFs("init");
 
-      // Some desktop clients reject fullscreen requests that aren't tied to
-      // a user gesture; retry on first pointerdown.
-      pointerListener = () => {
-        if (!wa.isFullscreen) tryFs("first-gesture");
-      };
-      window.addEventListener("pointerdown", pointerListener, {
-        once: true,
-        capture: true,
-      });
+        // Some desktop clients require a user gesture before allowing
+        // fullscreen; retry on the first pointerdown.
+        pointerListener = () => {
+          if (!wa.isFullscreen) tryFs("first-gesture");
+        };
+        window.addEventListener("pointerdown", pointerListener, {
+          once: true,
+          capture: true,
+        });
+      } else if (process.env.NODE_ENV !== "production") {
+        console.debug(
+          `[TgInit] fullscreen unavailable — host reports Bot API ${wa.version}, requires 8.0+. Update Telegram (Desktop ≥5.x, mobile ≥10.x) to enable real fullscreen.`,
+        );
+      }
     });
 
     return () => {

@@ -21,9 +21,12 @@ function eventLink(slug: string, surface: "public" | "miniapp"): CardLink {
 export function FeaturedEventCard({
   event,
   surface,
+  priority = false,
 }: {
   event: EventForDisplay;
   surface: "public" | "miniapp";
+  /** Mark the LCP image (first featured card in the feed) as priority/eager. */
+  priority?: boolean;
 }) {
   const { href } = eventLink(event.slug, surface);
   return (
@@ -39,7 +42,7 @@ export function FeaturedEventCard({
             fill
             sizes="(max-width: 768px) 100vw, 480px"
             className="object-cover"
-            priority={false}
+            priority={priority}
           />
         ) : null}
       </div>
