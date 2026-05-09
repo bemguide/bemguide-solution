@@ -130,13 +130,17 @@ export function TgInit() {
 
       // Trade initData for a backend session token. Idempotent — the
       // helper short-circuits when an unexpired token is already in
-      // localStorage. Failures here are non-fatal because every authed
-      // `apiFetch` re-runs `ensureAuth` on its own, so a page mounting
-      // before this resolves still gets through cleanly.
+      // localStorage, and shares a single-flight gate + 5s cool-down
+      // with the implicit `ensureAuth` that authed `apiFetch` calls
+      // run on their own. So failures here are silent: the next
+      // user-driven request will re-attempt and surface the error in
+      // its own UI affordance.
       const initData = wa.initData ?? "";
       if (initData) {
         exchangeInitData(initData).catch((err: unknown) => {
-          console.warn("[TgInit] exchangeInitData failed:", err);
+          if (process.env.NODE_ENV !== "production") {
+            console.debug("[TgInit] exchangeInitData failed (will retry on next call):", err);
+          }
         });
       } else if (process.env.NODE_ENV !== "production") {
         console.debug("[TgInit] no initData on the WebApp — skipping auth exchange");

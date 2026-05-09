@@ -105,6 +105,42 @@ function readInitData(): string {
   return wa?.initData ?? "";
 }
 
+/** True when `window.Telegram.WebApp` has been populated by telegram-web-app.js. */
+function isSdkLoaded(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(
+    (window as { Telegram?: { WebApp?: unknown } }).Telegram?.WebApp,
+  );
+}
+
+/**
+ * Read initData, waiting up to `timeoutMs` for telegram-web-app.js to
+ * finish loading. TgInit kicks off the SDK fetch on mount, but page
+ * mounts can race ahead of it — without this wait the first
+ * `apiFetch` was throwing `no_telegram_environment` even when running
+ * inside Telegram.
+ *
+ * Polling stops the moment the SDK is loaded — so inside Telegram
+ * this resolves within one tick of TgInit completing (~100ms),
+ * whereas outside Telegram we time out and the caller can decide
+ * what to render.
+ */
+async function readInitDataWithWait(timeoutMs = 3000): Promise<string> {
+  const direct = readInitData();
+  if (direct) return direct;
+  if (typeof window === "undefined") return "";
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => window.setTimeout(r, 100));
+    if (isSdkLoaded()) {
+      // SDK has loaded — initData is now authoritative (empty = outside TG).
+      return readInitData();
+    }
+  }
+  return "";
+}
+
 /** True when this page is running inside a Telegram Mini App. */
 export function isTelegramEnvironment(): boolean {
   return readInitData().length > 0;
@@ -186,7 +222,11 @@ async function performExchange(): Promise<AuthExchangeResponse | null> {
   }
   authInFlight = (async () => {
     try {
-      const initData = readInitData();
+      // Wait briefly for telegram-web-app.js to finish loading. Without
+      // this the first `apiFetch` after a navigation can race the SDK
+      // load and incorrectly conclude "no Telegram environment" while
+      // running inside the Mini App.
+      const initData = await readInitDataWithWait();
       if (!initData) {
         throw new ApiError(0, "no_telegram_environment");
       }
@@ -195,7 +235,13 @@ async function performExchange(): Promise<AuthExchangeResponse | null> {
       lastAuthFailure = null;
       return res;
     } catch (e) {
-      if (e instanceof ApiError) lastAuthFailure = { at: Date.now(), error: e };
+      // Only cache *real* backend failures. `no_telegram_environment`
+      // is a transient SDK-not-loaded state (or "outside Telegram") —
+      // both are cheap to re-check, so don't burn a 5s cool-down on
+      // them.
+      if (e instanceof ApiError && e.message !== "no_telegram_environment") {
+        lastAuthFailure = { at: Date.now(), error: e };
+      }
       throw e;
     }
   })();
