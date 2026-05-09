@@ -19,6 +19,8 @@ export type TelegramWebApp = {
       last_name?: string;
       username?: string;
       language_code?: string;
+      /** Bot API 7.0+. Absent on older clients. */
+      photo_url?: string;
     };
     start_param?: string;
   };

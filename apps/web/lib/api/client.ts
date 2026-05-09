@@ -289,6 +289,15 @@ export async function exchangeInitData(
 export function logout(): void {
   clearSession();
   lastAuthFailure = null;
+  // Clear cached payloads so the next user starts clean.
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem("poruch.v2.feed.cache.v1");
+      window.localStorage.removeItem("poruch.v2.me.cache.v1");
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 /**

@@ -21,6 +21,9 @@ export function getTgUser(): {
   lastName?: string;
   username?: string;
   languageCode?: string;
+  /** TG profile photo URL. Bot API 7.0+; undefined on older clients or
+   *  when the user has no avatar set. */
+  photoUrl?: string;
 } {
   const u = tg()?.initDataUnsafe?.user;
   return {
@@ -29,6 +32,7 @@ export function getTgUser(): {
     lastName: u?.last_name,
     username: u?.username,
     languageCode: u?.language_code,
+    photoUrl: u?.photo_url,
   };
 }
 
