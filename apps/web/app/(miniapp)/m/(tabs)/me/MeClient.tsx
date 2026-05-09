@@ -4,14 +4,13 @@
 //   - Upcoming attendances (joining / attended)
 //   - Re-onboard link + sign-out
 //
-// Same stale-while-revalidate pattern as /m/feed: paint instantly
-// from any cached /me, refresh in background, swap when fresh.
+// No top header — the bottom tab bar already says we're on the
+// profile, so duplicating "Я" up top would just eat vertical space.
 
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, ChevronRight, MapPin, Pencil, RefreshCw, User } from "lucide-react";
 import {
   describeError,
   getCurrentUser,
@@ -69,13 +68,7 @@ export function MeClient() {
     // wall of white. Mirrors the layout of the loaded view (profile
     // card + upcoming list) so the swap doesn't reflow.
     return (
-      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-4">
-        <header className="flex items-center justify-between">
-          <h1 className="text-foreground inline-flex items-center gap-2 text-xl font-semibold">
-            Я
-            <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
-          </h1>
-        </header>
+      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-6">
         <div className="bg-card border-border h-32 w-full animate-pulse rounded-2xl border" />
         <div className="bg-muted h-4 w-32 animate-pulse rounded" />
         <div className="space-y-2">
@@ -88,9 +81,8 @@ export function MeClient() {
 
   if (!me) {
     return (
-      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 pt-4">
+      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 pt-6">
         <EmptyState
-          icon={<User className="h-10 w-10" aria-hidden />}
           title="Не вдалось завантажити профіль"
           body={error ?? undefined}
           action={
@@ -110,16 +102,7 @@ export function MeClient() {
   const showName = me.show_name_publicly && me.display_name?.trim();
 
   return (
-    <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-4">
-      <header className="flex items-center justify-between">
-        <h1 className="text-foreground inline-flex items-center gap-2 text-xl font-semibold">
-          Я
-          {refreshing ? (
-            <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
-          ) : null}
-        </h1>
-      </header>
-
+    <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-6">
       <section className="bg-card border-border space-y-2 rounded-2xl border p-4">
         <div className="flex items-center gap-3">
           <div className="bg-primary text-primary-foreground flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-lg font-semibold">
@@ -127,8 +110,7 @@ export function MeClient() {
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-foreground truncate text-base font-semibold">{displayName}</p>
-            <p className="text-muted-foreground inline-flex items-center gap-1 text-sm">
-              <MapPin className="h-3.5 w-3.5" aria-hidden />
+            <p className="text-muted-foreground truncate text-sm">
               {me.city ?? "Місто не вказано"}
             </p>
           </div>
@@ -140,9 +122,8 @@ export function MeClient() {
         </p>
         <Link
           href="/m/onboarding"
-          className="text-primary -mb-1 inline-flex items-center gap-1 text-sm font-medium underline-offset-2 hover:underline"
+          className="text-primary -mb-1 inline-flex text-sm font-medium underline-offset-2 hover:underline"
         >
-          <Pencil className="h-3.5 w-3.5" aria-hidden />
           Змінити профіль
         </Link>
       </section>
@@ -161,9 +142,8 @@ export function MeClient() {
               <li key={`${attendee.event_id}-${attendee.user_id}`}>
                 <Link
                   href={`/m/event/${attendee.event_id}`}
-                  className="bg-card border-border hover:border-primary/40 flex items-center gap-3 rounded-xl border p-3 transition"
+                  className="bg-card border-border hover:border-primary/40 flex items-center justify-between gap-3 rounded-xl border p-3 transition"
                 >
-                  <CalendarClock className="text-primary h-5 w-5 shrink-0" aria-hidden />
                   <div className="min-w-0 flex-1">
                     <p className="text-foreground truncate text-sm font-semibold">
                       {opportunity.title}
@@ -174,7 +154,6 @@ export function MeClient() {
                         : opportunity.city}
                     </p>
                   </div>
-                  <ChevronRight className="text-muted-foreground h-4 w-4" aria-hidden />
                 </Link>
               </li>
             ))}
