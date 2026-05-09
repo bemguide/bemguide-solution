@@ -17,7 +17,8 @@
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"**/*.{ts,json,md}\"",
     "worker:dispatch": "tsx src/workers/dispatch-invitations.ts",
-    "worker:rooms": "tsx src/workers/provision-rooms.ts"
+    "worker:rooms": "tsx src/workers/provision-rooms.ts",
+    "dev:token": "tsx scripts/dev-token.ts"
   },
   "dependencies": {
     "@fastify/cors": "^9.0.1",
