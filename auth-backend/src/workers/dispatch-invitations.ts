@@ -101,7 +101,7 @@ async function deliveryPhase(): Promise<{
         continue;
       }
 
-      const text = inviteText(inv.opportunities?.title ?? 'Подія', inv.id);
+      const text = inviteText(inv.opportunities?.title ?? 'Подія', inv.event_id);
       const result = await sendMessage(user.telegram_user_id, text);
       const messageId = (result as { message_id?: number }).message_id ?? null;
       await markSent(inv.id, messageId === null ? null : String(messageId));
@@ -117,9 +117,17 @@ async function deliveryPhase(): Promise<{
   return { sent, failed, skipped_no_telegram };
 }
 
-function inviteText(title: string, invitationId: string): string {
-  // The bot owns the response UX; this is the cold-start message.
-  return `Тебе запрошено: ${title}\n\nВідповісти можна тут (id: ${invitationId})`;
+function inviteText(title: string, eventId: string): string {
+  // Cold-start invitation. Mini App deep-link with the `evt_` prefix the
+  // frontend's `/` route matches to redirect into `/m/event/<event_id>`.
+  // Same string shape that `buildEventShareUrl` produces on the share path,
+  // so message-vs-share land users in the same place.
+  // If TELEGRAM_BOT_USERNAME is unset (e.g. local dev without a real bot),
+  // omit the link entirely rather than ship a broken URL.
+  const link = env.TELEGRAM_BOT_USERNAME
+    ? `https://t.me/${env.TELEGRAM_BOT_USERNAME}?startapp=evt_${eventId}`
+    : '';
+  return link ? `Тебе запрошено: ${title}\n\n${link}` : `Тебе запрошено: ${title}`;
 }
 
 async function main(): Promise<void> {
