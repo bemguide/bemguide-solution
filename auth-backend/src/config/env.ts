@@ -29,6 +29,11 @@ const envSchema = z.object({
   SESSION_JWT_SECRET: z.string().min(16).default('placeholder-session-jwt-secret-change-me'),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(86400),
 
+  // Check-in QR token: short-lived JWT minted by GET /opportunities/:id/check-in-token,
+  // shown to organizer's scanner at the venue. Long enough to walk over with the
+  // QR open, short enough to limit replay if the QR is photographed.
+  CHECK_IN_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(600),
+
   // Telegram link token: HMAC-SHA256 secret shared with the bot for the
   // /me/telegram/link endpoint (separate from the initData-driven login).
   TELEGRAM_LINK_SECRET: z.string().min(16).default('placeholder-telegram-link-secret-change-me'),

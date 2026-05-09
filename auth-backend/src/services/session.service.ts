@@ -16,6 +16,10 @@ import { AppError } from '../utils/errors.js';
 
 const ISSUER = 'auth-backend';
 const AUDIENCE = 'mini-app';
+// Distinct audience namespaces a check-in QR JWT from a session JWT — both are
+// HS256 with SESSION_JWT_SECRET, so the audience claim is what stops one from
+// being accepted in the other's verify path.
+const CHECK_IN_AUDIENCE = 'check-in';
 
 const secret = (): Uint8Array => new TextEncoder().encode(env.SESSION_JWT_SECRET);
 
@@ -47,6 +51,61 @@ export async function mintSessionJwt(
     expires_at: new Date(exp * 1000).toISOString(),
     expires_at_unix: exp,
   };
+}
+
+// Mint a short-lived check-in QR token. Same secret as session JWTs but a
+// distinct `aud` so a leaked check-in token can't be passed to authGuard, and
+// vice-versa. Payload carries event_id so the verifier can confirm the QR
+// matches the event being scanned without an extra DB lookup.
+export async function mintCheckInToken(
+  userId: string,
+  eventId: string,
+  ttlSeconds: number = env.CHECK_IN_TOKEN_TTL_SECONDS,
+): Promise<MintedSession> {
+  const now = Math.floor(Date.now() / 1000);
+  const exp = now + ttlSeconds;
+
+  const token = await new SignJWT({ event_id: eventId })
+    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setIssuer(ISSUER)
+    .setAudience(CHECK_IN_AUDIENCE)
+    .setSubject(userId)
+    .setIssuedAt(now)
+    .setExpirationTime(exp)
+    .sign(secret());
+
+  return {
+    token,
+    expires_at: new Date(exp * 1000).toISOString(),
+    expires_at_unix: exp,
+  };
+}
+
+// Verify a check-in QR token (organizer-side scanner endpoint will call this).
+// Throws AppError.unauthenticated/expired on failure; returns the payload on
+// success. The audience check rejects session JWTs presented as check-in QRs.
+export async function verifyCheckInToken(token: string): Promise<{
+  user_id: string;
+  event_id: string;
+}> {
+  try {
+    const { payload } = await jwtVerify(token, secret(), { audience: CHECK_IN_AUDIENCE });
+    if (typeof payload.sub !== 'string' || !payload.sub) {
+      throw AppError.unauthenticated('Invalid check-in token (no sub claim)');
+    }
+    if (typeof payload.event_id !== 'string' || !payload.event_id) {
+      throw AppError.unauthenticated('Invalid check-in token (no event_id claim)');
+    }
+    return { user_id: payload.sub, event_id: payload.event_id };
+  } catch (err) {
+    if (err instanceof joseErrors.JWTExpired) {
+      throw AppError.expired('Check-in token expired');
+    }
+    if (err instanceof joseErrors.JOSEError) {
+      throw AppError.unauthenticated('Invalid check-in token');
+    }
+    throw err;
+  }
 }
 
 // Used by auth-guard. Returns user id + email + role on success; throws
