@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "*.supabase.in" },
     ],
   },
+  allowedDevOrigins: ["paleogenetic-carlie-punishingly.ngrok-free.dev"],
 };
 
 export default nextConfig;

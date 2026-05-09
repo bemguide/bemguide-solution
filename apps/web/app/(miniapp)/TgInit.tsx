@@ -139,7 +139,15 @@ export function TgInit() {
         callQuiet("disableVerticalSwipes", () => wa.disableVerticalSwipes?.());
       }
 
-      if (supports("8.0")) {
+      // Fullscreen policy: phone clients only.
+      //   - On phones (android/ios) Telegram's chrome takes meaningful vertical
+      //     space; fullscreen reclaims it for the app.
+      //   - On desktop (tdesktop/macos/web*) the Mini App opens in a panel that
+      //     fullscreen would inflate to the entire window — usually annoying for
+      //     the user, who wants to see the chat alongside.
+      const isPhone = wa.platform === "android" || wa.platform === "ios";
+
+      if (isPhone && supports("8.0")) {
         wa.onEvent?.("fullscreenChanged", () => {
           if (process.env.NODE_ENV !== "production") {
             console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
@@ -157,8 +165,7 @@ export function TgInit() {
 
         tryFs("init");
 
-        // Some desktop clients require a user gesture before allowing
-        // fullscreen; retry on the first pointerdown.
+        // Some clients require a user gesture before allowing fullscreen.
         pointerListener = () => {
           if (!wa.isFullscreen) tryFs("first-gesture");
         };
@@ -167,9 +174,15 @@ export function TgInit() {
           capture: true,
         });
       } else if (process.env.NODE_ENV !== "production") {
-        console.debug(
-          `[TgInit] fullscreen unavailable — host reports Bot API ${wa.version}, requires 8.0+. Update Telegram (Desktop ≥5.x, mobile ≥10.x) to enable real fullscreen.`,
-        );
+        if (!isPhone) {
+          console.debug(
+            `[TgInit] fullscreen skipped on platform=${wa.platform} (desktop = panel mode by design)`,
+          );
+        } else {
+          console.debug(
+            `[TgInit] fullscreen unavailable — host reports Bot API ${wa.version}, requires 8.0+. Update Telegram (Desktop ≥5.x, mobile ≥10.x) for real fullscreen.`,
+          );
+        }
       }
     });
 
