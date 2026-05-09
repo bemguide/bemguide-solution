@@ -21,28 +21,9 @@ import L from "leaflet";
 import { LocateFixed, MapPin } from "lucide-react";
 import "leaflet/dist/leaflet.css";
 import { cn } from "@/lib/utils";
+import { getCityMapConfig } from "@/lib/cities";
 
 type Pin = { lat: number; lng: number };
-
-type CityMapConfig = {
-  center: [number, number];
-  zoom: number;
-  bounds: [[number, number], [number, number]];
-};
-
-const CITY_MAP: Record<string, CityMapConfig> = {
-  Дніпро: {
-    center: [48.4647, 35.0462],
-    zoom: 12,
-    bounds: [
-      [48.385, 34.85],
-      [48.55, 35.21],
-    ],
-  },
-  // Add other cities here as their feeds unlock end-to-end.
-};
-
-const FALLBACK = CITY_MAP["Дніпро"]!;
 
 // Inline SVG so we don't ship Leaflet's default marker raster (the one
 // that needs `leaflet/dist/images/marker-icon.png` symlinks). Brand teal
@@ -79,7 +60,7 @@ export function MapPicker({ city, pin, onChange, onLocate, locating, invalid }: 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const config = CITY_MAP[city] ?? FALLBACK;
+    const config = getCityMapConfig(city);
     const map = L.map(el, {
       center: config.center,
       zoom: config.zoom,
@@ -135,7 +116,7 @@ export function MapPicker({ city, pin, onChange, onLocate, locating, invalid }: 
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const config = CITY_MAP[city] ?? FALLBACK;
+    const config = getCityMapConfig(city);
     map.setMaxBounds(L.latLngBounds(config.bounds));
     if (!pin) map.setView(config.center, config.zoom);
   }, [city, pin]);

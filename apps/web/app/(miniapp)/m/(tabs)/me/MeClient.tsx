@@ -10,7 +10,7 @@
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   describeError,
@@ -34,12 +34,15 @@ export function MeClient() {
   const [upcoming, setUpcoming] = useState<UpcomingItem[] | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const ranRef = useRef(false);
 
   useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-
+    // No `ranRef` guard: a useRef-backed flag persists across React
+    // strict-mode unmount/remount, which combined with the
+    // `cancelled` closure gate poisoned the in-flight fetch from
+    // mount #1 and skipped the work on mount #2. Net result was a
+    // blank profile until manual reload. Letting strict-mode fire
+    // both mounts is fine — both /me + /me/upcoming are idempotent
+    // GETs, and prod doesn't double-mount.
     let cancelled = false;
 
     // Hydrate everything we can synchronously, in this exact order

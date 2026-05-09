@@ -20,7 +20,7 @@
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
@@ -62,12 +62,13 @@ export function FeedClient() {
   const [sections, setSections] = useState<DisplaySections | null>(null);
   const [city, setCity] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const ranRef = useRef(false);
 
   useEffect(() => {
-    if (ranRef.current) return;
-    ranRef.current = true;
-
+    // No `ranRef` guard — see MeClient for the same fix; the
+    // useRef-backed flag persisted across React strict-mode
+    // unmount/remount and silently skipped the second mount,
+    // leaving the page stuck on the cached/skeleton view until
+    // a manual reload.
     let cancelled = false;
     const startedAt = performance.now();
 
