@@ -4,23 +4,23 @@ Living document. Updated after every milestone, with a self-review every 3 miles
 
 ## Status by milestone
 
-| #   | Milestone                                     | Status         | Commit    |
-| --- | --------------------------------------------- | -------------- | --------- |
-| M1  | Repo skeleton + tooling                       | ✅ done        | `908b3e7` |
-| M2  | Supabase schema + RLS                         | ✅ done        | `aab6171` |
-| M3  | Seed 30 events / 7 orgs / 119 ghost RSVPs     | ✅ done        | `9e2f984` |
-| M4  | Edge function infra (`_shared`)               | ✅ done        | `312619f` |
-| M5  | Gemini prompts + 4 functions wired + evals    | ✅ done        | `0beb551` |
-| M6  | Telegram bot edge function + webhook          | ✅ done        | `2aa3d55` |
-| M7  | Web design tokens + base components           | ⏳ pending     | —         |
-| M8  | Public event page `/event/[slug]`             | ⏳ pending     | —         |
-| M9  | Miniapp `/m/onboarding` + `/m/feed`           | ⏳ pending     | —         |
-| M10 | Miniapp `/m/event/[slug]` + RSVP modal + .ics | ⏳ pending     | —         |
-| M11 | Notify scheduler cron + 4 templates           | ⏳ pending     | —         |
-| M12 | NL propose flow (bot + miniapp)               | ⏳ pending     | —         |
-| M13 | Admin panel                                   | ⏳ pending     | —         |
-| M14 | Deploy + 4-persona smoke                      | ⏳ pending     | —         |
-| M15 | DEMO_SCRIPT.md + this file                    | ⏳ pending     | —         |
+| #   | Milestone                                     | Status     | Commit    |
+| --- | --------------------------------------------- | ---------- | --------- |
+| M1  | Repo skeleton + tooling                       | ✅ done    | `908b3e7` |
+| M2  | Supabase schema + RLS                         | ✅ done    | `aab6171` |
+| M3  | Seed 30 events / 7 orgs / 119 ghost RSVPs     | ✅ done    | `9e2f984` |
+| M4  | Edge function infra (`_shared`)               | ✅ done    | `312619f` |
+| M5  | Gemini prompts + 4 functions wired + evals    | ✅ done    | `0beb551` |
+| M6  | Telegram bot edge function + webhook          | ✅ done    | `2aa3d55` |
+| M7  | Web design tokens + base components           | ⏳ pending | —         |
+| M8  | Public event page `/event/[slug]`             | ⏳ pending | —         |
+| M9  | Miniapp `/m/onboarding` + `/m/feed`           | ⏳ pending | —         |
+| M10 | Miniapp `/m/event/[slug]` + RSVP modal + .ics | ⏳ pending | —         |
+| M11 | Notify scheduler cron + 4 templates           | ⏳ pending | —         |
+| M12 | NL propose flow (bot + miniapp)               | ⏳ pending | —         |
+| M13 | Admin panel                                   | ⏳ pending | —         |
+| M14 | Deploy + 4-persona smoke                      | ⏳ pending | —         |
+| M15 | DEMO_SCRIPT.md + this file                    | ⏳ pending | —         |
 
 ## Decisions made
 
