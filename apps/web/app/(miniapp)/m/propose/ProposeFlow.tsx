@@ -28,13 +28,7 @@ import {
   type InterestCategory,
 } from "@poruch/shared";
 import { cn } from "@/lib/utils";
-import {
-  ApiError,
-  createOpportunity,
-  exchangeInitData,
-  getCurrentUser,
-  isSessionExpired,
-} from "@/lib/api";
+import { ApiError, createOpportunity, getCurrentUser } from "@/lib/api";
 
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   Київ: { lat: 50.4501, lng: 30.5234 },
@@ -91,14 +85,6 @@ export function ProposeFlow() {
     let cancelled = false;
     async function load() {
       try {
-        if (isSessionExpired()) {
-          const initData =
-            (typeof window !== "undefined" &&
-              (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
-                ?.initData) ??
-            "";
-          if (initData) await exchangeInitData(initData);
-        }
         const me = await getCurrentUser().catch(() => null);
         if (cancelled) return;
         if (me?.city) setForm((f) => ({ ...f, city: me.city ?? DEFAULT_CITY }));
@@ -160,7 +146,9 @@ export function ProposeFlow() {
       setSubmitted({ id: opp.id });
     } catch (e) {
       if (e instanceof ApiError) {
-        if (e.status === 401) {
+        if (e.message === "no_telegram_environment") {
+          setError("Відкрий додаток у Telegram, щоб публікувати події.");
+        } else if (e.status === 401) {
           setError("Сесія завершилась — закрий і відкрий додаток ще раз.");
         } else if (e.status === 400) {
           setError("Перевір поля — щось не пройшло валідацію.");

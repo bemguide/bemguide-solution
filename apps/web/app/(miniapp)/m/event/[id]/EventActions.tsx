@@ -299,6 +299,8 @@ export function EventActions({
 
 function rsvpErrorToMessage(e: unknown): string {
   if (e instanceof ApiError) {
+    if (e.message === "no_telegram_environment")
+      return "Відкрий додаток у Telegram, щоб записатися.";
     if (e.message === "event_started") return "Подія вже почалася.";
     if (e.message === "already_rsvped") return "Ти вже відповів на цю подію.";
     if (e.status === 401) return "Сесія завершилась — закрий і відкрий додаток.";

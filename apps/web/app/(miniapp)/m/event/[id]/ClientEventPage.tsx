@@ -13,10 +13,8 @@ import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
 import {
   ApiError,
-  exchangeInitData,
   getOpportunity,
   getOpportunityAttendees,
-  isSessionExpired,
   type AttendeeSummary,
   type OpportunityCard,
 } from "@/lib/api";
@@ -34,14 +32,8 @@ export function ClientEventPage({ id }: { id: string }) {
     let cancelled = false;
     async function load() {
       try {
-        if (isSessionExpired()) {
-          const initData =
-            (typeof window !== "undefined" &&
-              (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
-                ?.initData) ??
-            "";
-          if (initData) await exchangeInitData(initData);
-        }
+        // apiFetch auto-exchanges initData and self-heals 401, so no
+        // explicit auth dance here.
         const [event, attendees] = await Promise.all([
           getOpportunity(id),
           getOpportunityAttendees(id),

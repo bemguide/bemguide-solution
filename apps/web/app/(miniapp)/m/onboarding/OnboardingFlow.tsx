@@ -35,13 +35,7 @@ import {
   tgOpenLocationSettings,
 } from "@/lib/telegram/client";
 import { cn } from "@/lib/utils";
-import {
-  ApiError,
-  exchangeInitData,
-  isSessionExpired,
-  updateCurrentUser,
-  type UserPatch,
-} from "@/lib/api";
+import { ApiError, updateCurrentUser, type UserPatch } from "@/lib/api";
 
 type StepState = {
   city: string;
@@ -133,23 +127,17 @@ export function OnboardingFlow() {
 
   async function persist(patch: UserPatch): Promise<boolean> {
     try {
-      // If the SDK hasn't bootstrapped auth yet, do it inline. Without a
-      // token PATCH /me would 401.
-      if (isSessionExpired()) {
-        const initData =
-          (typeof window !== "undefined" &&
-            (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
-              ?.initData) ??
-          "";
-        if (initData) await exchangeInitData(initData);
-      }
+      // apiFetch auto-exchanges initData on first call and self-heals
+      // a single 401, so we don't need to manage tokens here.
       await updateCurrentUser(patch);
       return true;
     } catch (e) {
       // Non-fatal: log and let the user keep going. Onboarding is
       // skip-able; we don't want to gate the user behind a backend hiccup.
       console.warn("onboarding patch failed:", e);
-      if (e instanceof ApiError && e.status === 401) {
+      if (e instanceof ApiError && e.message === "no_telegram_environment") {
+        setError("Відкрий додаток у Telegram, щоб зберегти налаштування.");
+      } else if (e instanceof ApiError && e.status === 401) {
         setError("Сесія завершилась. Закрий і відкрий додаток ще раз.");
       }
       return false;

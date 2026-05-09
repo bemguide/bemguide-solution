@@ -130,9 +130,9 @@ export function TgInit() {
 
       // Trade initData for a backend session token. Idempotent — the
       // helper short-circuits when an unexpired token is already in
-      // sessionStorage. Failures are non-fatal: the rest of the SDK
-      // wiring still runs, and individual API calls will surface their
-      // own errors.
+      // localStorage. Failures here are non-fatal because every authed
+      // `apiFetch` re-runs `ensureAuth` on its own, so a page mounting
+      // before this resolves still gets through cleanly.
       const initData = wa.initData ?? "";
       if (initData) {
         exchangeInitData(initData).catch((err: unknown) => {

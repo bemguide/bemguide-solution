@@ -12,10 +12,9 @@ import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import {
   ApiError,
-  exchangeInitData,
   getCurrentUser,
   getFeed,
-  isSessionExpired,
+  isTelegramEnvironment,
   opportunityToDisplay,
   type FeedSections as V2FeedSections,
 } from "@/lib/api";
@@ -50,15 +49,9 @@ export function FeedClient() {
     let cancelled = false;
     async function load() {
       try {
-        // If TgInit hasn't finished the exchange yet, do it ourselves.
-        if (isSessionExpired()) {
-          const initData =
-            (typeof window !== "undefined" &&
-              (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
-                ?.initData) ??
-            "";
-          if (initData) await exchangeInitData(initData);
-        }
+        // apiFetch auto-exchanges initData when the token is missing
+        // and self-heals a single 401, so pages no longer need to do
+        // the dance manually.
         const me = await getCurrentUser().catch(() => null);
         if (cancelled) return;
         const myCity = me?.city ?? undefined;
@@ -69,11 +62,7 @@ export function FeedClient() {
         setLoading(false);
       } catch (e) {
         if (cancelled) return;
-        if (e instanceof ApiError && e.status === 401) {
-          setError("Авторизація через Telegram не пройшла. Закрий і відкрий додаток ще раз.");
-        } else {
-          setError(e instanceof Error ? friendlyError(e) : "Щось пішло не так. Спробуй ще раз.");
-        }
+        setError(friendlyError(e));
         setLoading(false);
       }
     }
@@ -88,6 +77,11 @@ export function FeedClient() {
   }
 
   if (error || !sections) {
+    // The "open in Telegram" path has its own dedicated UI so we don't
+    // bury it under a generic error.
+    if (error === "no_telegram_environment") {
+      return <OpenInTelegramScreen />;
+    }
     return (
       <main className="px-4 py-6">
         <EmptyState
@@ -197,15 +191,49 @@ export function FeedClient() {
   );
 }
 
-function friendlyError(e: Error): string {
+function friendlyError(e: unknown): string {
   if (e instanceof ApiError) {
+    if (e.message === "no_telegram_environment") return "no_telegram_environment";
     if (e.message === "NEXT_PUBLIC_API_BASE is not set") {
       return "Бекенд ще не підключений. Перевір NEXT_PUBLIC_API_BASE.";
     }
     if (e.status === 0) return "Не вдалось дістатися сервера.";
+    if (e.status === 401) {
+      // After ensureAuth + 401 retry both failed — likely a bad bot
+      // token / clock drift. Telling the user to reopen Telegram is
+      // the only useful action we can offer.
+      return isTelegramEnvironment()
+        ? "Сесія завершилась. Закрий і відкрий додаток ще раз."
+        : "no_telegram_environment";
+    }
     if (e.status >= 500) return "Сервер тимчасово не відповідає. Спробуй за хвилину.";
   }
-  return e.message;
+  return e instanceof Error ? e.message : "Щось пішло не так. Спробуй ще раз.";
+}
+
+function OpenInTelegramScreen() {
+  const botUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? "";
+  const deepLink = botUsername ? `https://t.me/${botUsername}?startapp=feed` : null;
+  return (
+    <main className="px-6 py-10 text-center">
+      <div className="bg-primary/10 mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full">
+        <Sparkles className="text-primary h-6 w-6" aria-hidden />
+      </div>
+      <h1 className="text-foreground text-xl font-semibold">Відкрий у Telegram</h1>
+      <p className="text-muted-foreground mt-2 text-sm">
+        Цей екран працює всередині додатка Telegram — там ми бачимо твій профіль і показуємо події
+        поряд.
+      </p>
+      {deepLink ? (
+        <Link
+          href={deepLink}
+          className="bg-primary text-primary-foreground mt-6 inline-flex h-12 items-center rounded-full px-6 text-sm font-semibold"
+        >
+          Відкрити у Telegram
+        </Link>
+      ) : null}
+    </main>
+  );
 }
 
 function FeedSkeleton() {
