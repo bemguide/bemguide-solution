@@ -1,40 +1,41 @@
 {
-  "name": "bemguide-solution",
+  "name": "poruch",
   "version": "0.1.0",
   "private": true,
+  "description": "Поруч — Telegram Mini App + web platform that helps Ukrainian veterans find local events and community.",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
-  },
-  "dependencies": {
-    "@google/genai": "^2.0.1",
-    "@grammyjs/conversations": "^2.1.1",
-    "@supabase/supabase-js": "^2.105.4",
-    "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
-    "dayjs": "^1.11.20",
-    "grammy": "^1.42.0",
-    "lucide-react": "^1.14.0",
-    "next": "16.2.6",
-    "radix-ui": "^1.4.3",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "shadcn": "^4.7.0",
-    "tailwind-merge": "^3.5.0",
-    "tw-animate-css": "^1.4.0",
-    "undici": "^8.2.0",
-    "zod": "^4.4.3"
+    "dev": "pnpm --filter @poruch/web dev",
+    "build": "pnpm --filter @poruch/web build",
+    "start": "pnpm --filter @poruch/web start",
+    "lint": "pnpm -r --parallel lint",
+    "typecheck": "pnpm -r --parallel typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "seed": "tsx --env-file=.env.local supabase/seed/index.ts",
+    "db:link": "supabase link",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "fn:deploy": "tsx --env-file=.env.local scripts/deploy-functions.ts",
+    "fn:verify": "tsx --env-file=.env.local scripts/verify-functions.ts",
+    "fn:serve": "supabase functions serve",
+    "evals": "deno test --allow-net --allow-env --env-file=.env.local supabase/functions/_shared/evals/",
+    "tg:webhook:set": "tsx --env-file=.env.local scripts/tg-webhook-set.ts",
+    "tg:webhook:info": "tsx --env-file=.env.local scripts/tg-webhook-info.ts",
+    "tg:webhook:delete": "tsx --env-file=.env.local scripts/tg-webhook-delete.ts"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.6",
-    "tailwindcss": "^4",
+    "prettier": "^3.3.3",
+    "prettier-plugin-tailwindcss": "^0.6.11",
+    "tsx": "^4.19.2",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
+    "zod": "^4.4.3"
+  },
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=20"
   }
 }

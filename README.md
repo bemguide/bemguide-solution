@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Поруч
 
-## Getting Started
+Telegram Mini App + web platform that helps Ukrainian veterans find local events and community. Built for a 36-hour hackathon.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+- **Next.js 16** (App Router, TypeScript strict, Tailwind 4) on Vercel.
+- **Supabase** (Postgres, Auth, Storage, Edge Functions in Deno).
+- **grammY** Telegram bot deployed as a Supabase Edge Function.
+- **Gemini** (`gemini-3.1-flash-lite-preview` for ranking/copy, `gemini-3-flash-preview` for moderation/parse).
+- **shadcn/ui** + custom `components/poruch/*` for product surface.
+
+## Layout
+
+```
+apps/web/         Next.js: public event pages, miniapp (/m/*), admin panel (/admin/*)
+supabase/
+  migrations/     SQL schema + RLS
+  functions/      Deno edge functions (bot, rsvp-create, ics-generate, notify-scheduler, gemini-*)
+  seed/           Seed scripts (events, orgs, ghost RSVPs)
+packages/shared/  Zod schemas + constants shared between web and edge functions (via deno npm: imports)
+docs/PROMPTS/     Source-of-truth specs for each subsystem
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Quick start
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+pnpm install
+cp .env.example .env.local           # fill in real values
+pnpm db:link                          # link to Supabase project
+pnpm db:push                          # apply migrations
+pnpm seed                             # populate events + ghost RSVPs
+pnpm fn:deploy                        # deploy Supabase edge functions
+pnpm dev                              # start Next.js
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Scripts
 
-## Learn More
+| Command                        | What it does                                                 |
+| ------------------------------ | ------------------------------------------------------------ |
+| `pnpm dev`                     | Run Next.js dev server (`apps/web`).                         |
+| `pnpm build` / `pnpm start`    | Production build / serve.                                    |
+| `pnpm typecheck` / `pnpm lint` | Per-workspace type checks + lint.                            |
+| `pnpm seed`                    | Populate Supabase with seed data.                            |
+| `pnpm db:push`                 | Apply migrations to remote Supabase.                         |
+| `pnpm fn:deploy`               | Deploy edge functions to Supabase.                           |
+| `pnpm tg:webhook:set`          | Register the bot webhook with current `NEXT_PUBLIC_APP_URL`. |
 
-To learn more about Next.js, take a look at the following resources:
+## Specs
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+All subsystem specs live in [`docs/PROMPTS`](./docs/PROMPTS/). Read [`00_MASTER_BRIEF.md`](./docs/PROMPTS/00_MASTER_BRIEF.md) first.
