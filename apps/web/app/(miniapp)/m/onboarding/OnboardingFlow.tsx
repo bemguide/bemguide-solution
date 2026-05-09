@@ -37,6 +37,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   describeError,
+  logApiError,
   updateCurrentUser,
   type AccessibilityFlag,
   type AgeRange,
@@ -159,10 +160,12 @@ export function OnboardingFlow() {
       await updateCurrentUser(patch);
       return true;
     } catch (e) {
-      // Non-fatal: log + show but let the user keep going.
-      // Onboarding is skip-able; we don't gate forward navigation
-      // behind a backend hiccup.
-      console.warn("[onboarding] patch failed:", e);
+      // Non-fatal: log + show but let the user keep going. Onboarding
+      // is skip-able; we don't gate forward navigation behind a
+      // backend hiccup. `logApiError` surfaces the backend's `details`
+      // field in dev (e.g. "Invalid API key" from Supabase) so you
+      // don't have to curl the route to find out what's wrong.
+      logApiError("onboarding", e);
       setError(describeError(e, "onboarding"));
       return false;
     }

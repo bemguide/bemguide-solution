@@ -15,6 +15,7 @@ import {
   getCurrentUser,
   getFeed,
   isNoTelegramEnv,
+  logApiError,
   opportunityToDisplay,
   type FeedSections as V2FeedSections,
 } from "@/lib/api";
@@ -61,6 +62,7 @@ export function FeedClient() {
         setLoading(false);
       } catch (e) {
         if (cancelled) return;
+        logApiError("feed", e);
         if (isNoTelegramEnv(e)) {
           setError("no_telegram_environment");
         } else {

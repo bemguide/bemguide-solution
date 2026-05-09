@@ -28,7 +28,7 @@ import {
   type InterestCategory,
 } from "@poruch/shared";
 import { cn } from "@/lib/utils";
-import { createOpportunity, describeError, getCurrentUser } from "@/lib/api";
+import { createOpportunity, describeError, getCurrentUser, logApiError } from "@/lib/api";
 
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   Київ: { lat: 50.4501, lng: 30.5234 },
@@ -145,7 +145,7 @@ export function ProposeFlow() {
       });
       setSubmitted({ id: opp.id });
     } catch (e) {
-      console.warn("[propose] submit failed:", e);
+      logApiError("propose", e);
       setError(describeError(e, "propose"));
     } finally {
       setBusy(false);

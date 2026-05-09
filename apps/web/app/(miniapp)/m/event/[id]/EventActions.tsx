@@ -19,6 +19,7 @@ import { formatEventDateTime } from "@/lib/format";
 import {
   describeError,
   getRoom,
+  logApiError,
   rsvp,
   setShowNamePublicly,
   type V2EventRoom,
@@ -76,9 +77,8 @@ export function EventActions({
         startRoomPoll();
       }
     } catch (e) {
-      const msg = rsvpErrorToMessage(e);
-      console.warn("[rsvp] failed:", msg, e);
-      setError(msg);
+      logApiError("rsvp", e);
+      setError(rsvpErrorToMessage(e));
     } finally {
       setBusy(false);
     }

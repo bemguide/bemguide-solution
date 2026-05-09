@@ -86,3 +86,37 @@ export function describeError(e: unknown, ctx: ErrorContext = "default"): string
 export function isNoTelegramEnv(e: unknown): boolean {
   return e instanceof ApiError && e.message === "no_telegram_environment";
 }
+
+/**
+ * Extract the backend's `details` field (when present). The auth-backend
+ * sets it for outage codes — `upstream` carries the original Supabase /
+ * Telegram / Gemini error message, `validation_failed` carries
+ * `fieldErrors`. Useful for debug logging; surface to users only when
+ * `NODE_ENV !== production` (English text + internal field names).
+ */
+export function errorDetails(e: unknown): unknown {
+  if (!(e instanceof ApiError)) return undefined;
+  const body = e.body;
+  if (typeof body !== "object" || body === null) return undefined;
+  return (body as { details?: unknown }).details;
+}
+
+/**
+ * `console.warn` an ApiError in a form that's actually useful for
+ * debugging — surfaces the backend's `error` code + `details` (e.g.
+ * "Invalid API key" from Supabase) instead of the cryptic stack trace
+ * Next.js renders in dev. No-op in production except for the bare
+ * console.warn so we don't ship `details` to the browser.
+ */
+export function logApiError(tag: string, e: unknown): void {
+  if (e instanceof ApiError) {
+    const details = errorDetails(e);
+    if (details !== undefined && process.env.NODE_ENV !== "production") {
+      console.warn(`[${tag}] ${e.message} (HTTP ${e.status}):`, details);
+    } else {
+      console.warn(`[${tag}] ${e.message} (HTTP ${e.status})`);
+    }
+    return;
+  }
+  console.warn(`[${tag}]`, e);
+}
