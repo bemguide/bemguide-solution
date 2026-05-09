@@ -14,6 +14,7 @@ import { handleCors } from "../_shared/cors.ts";
 import { ok, err } from "../_shared/responses.ts";
 import { isServiceCaller } from "../_shared/auth.ts";
 import { adminClient } from "../_shared/supabase.ts";
+import { env } from "../_shared/env.ts";
 
 type Body = {
   veteran_id?: string;
@@ -131,6 +132,19 @@ Deno.serve(async (req) => {
       status: "pending",
     }));
     await supabase.from("notifications").insert(rows);
+
+    // Fire-and-forget kick to the scheduler so rsvp_confirm fires within a few
+    // seconds rather than waiting for the next cron tick.
+    const schedulerUrl = env
+      .supabaseUrl()
+      .replace(/\.supabase\.co.*$/, ".supabase.co/functions/v1/notify-scheduler");
+    fetch(schedulerUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${env.cronSecret()}`,
+      },
+    }).catch((e) => console.warn("scheduler kick failed:", e));
   }
 
   // Public counts after the write.
