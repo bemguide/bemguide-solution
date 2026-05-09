@@ -37,3 +37,6 @@ yarn-error.log*
 # supabase local artefacts (keep migrations + functions + seed + config tracked)
 supabase/.temp/
 supabase/.branches/
+
+# deno keeps its lock under supabase/functions
+/deno.lock
