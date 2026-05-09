@@ -56,7 +56,7 @@ export async function rsvpToOpportunity(
     }
   }
 
-  await maybeSetDisplayName(accessToken, userId, input.display_name ?? null);
+  await maybeSetDisplayName(userId, input.display_name ?? null);
 
   const nowIso = new Date().toISOString();
 

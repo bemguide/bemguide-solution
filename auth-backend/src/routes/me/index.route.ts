@@ -18,9 +18,9 @@ export async function meIndexRoute(app: FastifyInstance): Promise<void> {
   });
 
   app.patch('/me', { preHandler: authGuard }, async (req) => {
-    if (!req.user || !req.accessToken) throw AppError.unauthenticated();
+    if (!req.user) throw AppError.unauthenticated();
     const patch = parseOrThrow(onboardingPatchSchema, req.body, 'me patch');
-    const profile = await upsertOnboarding(req.accessToken, req.user.id, patch);
+    const profile = await upsertOnboarding(req.user.id, patch);
     return profile;
   });
 }

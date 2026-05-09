@@ -1,4 +1,4 @@
-import { supabaseAdmin, supabaseAsUser, type DbClient } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import type { Database } from '../types/supabase.generated.js';
 
@@ -115,17 +115,18 @@ export async function insertOnTelegramAuth(
 // Used by POST /opportunities/:id/rsvp when the request includes a display_name
 // and the user currently has none. Idempotent: passing a non-null name when
 // one already exists is a no-op.
+//
+// Service-role write: PostgREST won't accept our HS256 session JWTs (project
+// signs with ES256, private key in Supabase KMS). Authorization is enforced
+// at the route layer — `userId` comes from `req.user.id` after authGuard.
 export async function maybeSetDisplayName(
-  accessToken: string,
   userId: string,
   displayName: string | null | undefined,
 ): Promise<void> {
   if (!displayName) return;
   const current = await getById(userId);
   if (current?.display_name) return;
-  // user-token client → RLS self_update.
-  const client = supabaseAsUser(accessToken);
-  const { error, status } = await client
+  const { error, status } = await supabaseAdmin
     .from('users')
     .update({ display_name: displayName })
     .eq('id', userId);
@@ -135,15 +136,13 @@ export async function maybeSetDisplayName(
   }
 }
 
-// User-token client. Hits RLS users_self_update — the access token's auth.uid()
-// must equal id. Triggers users_match_recompute when score-relevant columns change.
-export async function upsertOnboarding(
-  accessToken: string,
-  id: string,
-  patch: OnboardingPatch,
-): Promise<UserRow> {
-  const client: DbClient = supabaseAsUser(accessToken);
-  const { data, error, status } = await client
+// Service-role write. Authorization is enforced at the route layer (id comes
+// from `req.user.id` after authGuard). RLS bypass is intentional: PostgREST
+// won't accept our HS256 session JWTs (project signs with ES256, private key
+// in Supabase KMS). Update of score-relevant columns still triggers
+// users_match_recompute — triggers fire regardless of role.
+export async function upsertOnboarding(id: string, patch: OnboardingPatch): Promise<UserRow> {
+  const { data, error, status } = await supabaseAdmin
     .from('users')
     .update(patch)
     .eq('id', id)

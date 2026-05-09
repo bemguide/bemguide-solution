@@ -18,9 +18,9 @@ export async function meProfileRoute(app: FastifyInstance): Promise<void> {
   // self_update). Update of city/interests/accessibility_flags/age_range/
   // company_preference/veteran_status fires users_match_recompute.
   app.patch('/me/profile', { preHandler: authGuard }, async (req) => {
-    if (!req.user || !req.accessToken) throw AppError.unauthenticated();
+    if (!req.user) throw AppError.unauthenticated();
     const patch = parseOrThrow(onboardingPatchSchema, req.body, 'onboarding patch');
-    const profile = await upsertOnboarding(req.accessToken, req.user.id, patch);
+    const profile = await upsertOnboarding(req.user.id, patch);
     return { profile };
   });
 }
