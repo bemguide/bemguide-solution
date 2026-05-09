@@ -6,6 +6,29 @@ export type UserRow = Database['public']['Tables']['users']['Row'];
 export type UserInsert = Database['public']['Tables']['users']['Insert'];
 export type UserUpdate = Database['public']['Tables']['users']['Update'];
 
+// Diagnostic logger for Supabase failures. Writes to stderr with a stable
+// `tag: "supabase_error"` so the log line is easy to grep in Railway.
+// Includes the full PostgrestError shape (code/message/details/hint) plus the
+// HTTP status PostgREST returned — distinguishes 401 (bad key) from 400
+// (schema) from 403 (RLS) from 5xx (Supabase-side) at a glance. Safe to log:
+// never includes the access token, service-role key, or row data.
+function logSupabaseError(
+  scope: string,
+  status: number | undefined,
+  error: unknown,
+  context?: Record<string, unknown>,
+): void {
+  console.error(
+    JSON.stringify({
+      tag: 'supabase_error',
+      scope,
+      status,
+      error,
+      context,
+    }),
+  );
+}
+
 // Q1–Q12 onboarding fields. Email/id come from auth.users and are not editable here.
 // telegram_user_id has its own dedicated endpoint (one-time-token signed by the bot).
 export type OnboardingPatch = Pick<
@@ -29,19 +52,29 @@ export type OnboardingPatch = Pick<
 // the row by id without depending on RLS (so we never serve a stale 'no row visible'
 // when the row exists but the token client lost context).
 export async function getById(id: string): Promise<UserRow | null> {
-  const { data, error } = await supabaseAdmin.from('users').select('*').eq('id', id).maybeSingle();
-  if (error) throw AppError.upstream('Failed to load user', error.message);
+  const { data, error, status } = await supabaseAdmin
+    .from('users')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    logSupabaseError('users.getById', status, error, { id });
+    throw AppError.upstream('Failed to load user', error.message);
+  }
   return data;
 }
 
 // Find-by-telegram-id, used by POST /auth/telegram to decide create-or-reuse.
 export async function getByTelegramId(telegramUserId: number): Promise<UserRow | null> {
-  const { data, error } = await supabaseAdmin
+  const { data, error, status } = await supabaseAdmin
     .from('users')
     .select('*')
     .eq('telegram_user_id', telegramUserId)
     .maybeSingle();
-  if (error) throw AppError.upstream('Failed to load user by telegram id', error.message);
+  if (error) {
+    logSupabaseError('users.getByTelegramId', status, error, { telegramUserId });
+    throw AppError.upstream('Failed to load user by telegram id', error.message);
+  }
   return data;
 }
 
@@ -53,7 +86,7 @@ export async function insertOnTelegramAuth(
   telegramUserId: number,
   displayName: string | null,
 ): Promise<UserRow> {
-  const { data, error } = await supabaseAdmin
+  const { data, error, status } = await supabaseAdmin
     .from('users')
     .insert({
       id,
@@ -69,6 +102,11 @@ export async function insertOnTelegramAuth(
       // Race: another concurrent request already created this row.
       throw AppError.conflict('User already exists');
     }
+    logSupabaseError('users.insertOnTelegramAuth', status, error, {
+      id,
+      email,
+      telegramUserId,
+    });
     throw AppError.upstream('Failed to create user from Telegram', error?.message);
   }
   return data;
@@ -87,11 +125,14 @@ export async function maybeSetDisplayName(
   if (current?.display_name) return;
   // user-token client → RLS self_update.
   const client = supabaseAsUser(accessToken);
-  const { error } = await client
+  const { error, status } = await client
     .from('users')
     .update({ display_name: displayName })
     .eq('id', userId);
-  if (error) throw AppError.upstream('Failed to set display_name', error.message);
+  if (error) {
+    logSupabaseError('users.maybeSetDisplayName', status, error, { userId });
+    throw AppError.upstream('Failed to set display_name', error.message);
+  }
 }
 
 // User-token client. Hits RLS users_self_update — the access token's auth.uid()
@@ -102,14 +143,20 @@ export async function upsertOnboarding(
   patch: OnboardingPatch,
 ): Promise<UserRow> {
   const client: DbClient = supabaseAsUser(accessToken);
-  const { data, error } = await client
+  const { data, error, status } = await client
     .from('users')
     .update(patch)
     .eq('id', id)
     .select('*')
     .maybeSingle();
 
-  if (error) throw AppError.upstream('Failed to update profile', error.message);
+  if (error) {
+    logSupabaseError('users.upsertOnboarding', status, error, {
+      id,
+      patch_keys: Object.keys(patch),
+    });
+    throw AppError.upstream('Failed to update profile', error.message);
+  }
   if (!data) {
     // Either the row doesn't exist yet or RLS hid it. Both are real bugs in
     // a flow where /auth/register seeds the row, so surface as 404.
@@ -122,7 +169,7 @@ export async function upsertOnboarding(
 // token is verified. We bypass RLS so the user's access token alone is enough
 // (no need to also speak as the user to satisfy a self_update policy).
 export async function updateTelegramLink(id: string, telegramUserId: number): Promise<UserRow> {
-  const { data, error } = await supabaseAdmin
+  const { data, error, status } = await supabaseAdmin
     .from('users')
     .update({ telegram_user_id: telegramUserId })
     .eq('id', id)
@@ -133,6 +180,7 @@ export async function updateTelegramLink(id: string, telegramUserId: number): Pr
     if (/duplicate key|unique/i.test(error.message)) {
       throw AppError.conflict('That Telegram account is already linked to a different user');
     }
+    logSupabaseError('users.updateTelegramLink', status, error, { id, telegramUserId });
     throw AppError.upstream('Failed to link Telegram', error.message);
   }
   if (!data) throw AppError.notFound('User profile not found');
