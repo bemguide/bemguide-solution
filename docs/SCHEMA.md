@@ -1,9 +1,15 @@
 # Supabase schema — primer for agents
 
 > **Status note (this repo, 2026-05-09):**
-> The migrations actually applied to our project ref `rwpzgsooevcmfcjaiqsy` are **only the v1 lane** (`supabase/migrations/0001_init.sql`, `0002_rls.sql`, `0003_pg_cron_notify.sql`). Everything below describing the **v2 lane** (`users`, `opportunities`, `event_matches`, `event_invitations`, `event_attendees`, `event_rooms`, plus migrations `0001b/0004/0005/0007/0008` and the `compute_match_score` function + matchmaking triggers) is **NOT yet implemented here** — it's the target schema. To add it, new migration files have to be written and pasted into Supabase Studio (same workflow we used for v1). When you do, follow the conventions documented in this file rather than improvising.
+> Both lanes are live in the production project (`rwpzgsooevcmfcjaiqsy`).
 >
-> The "v1 lane" in this primer maps 1:1 to what M2 created: `veterans`, `events`, `rsvps`, `notifications`, `bot_sessions`, `organizations`, `cities`, `discovery_sources`, `moderation_log`, `ratings`, `shares`. Those are the tables our M1–M15 stack reads/writes today.
+> - **v2 lane** (`users`, `opportunities`, `event_matches`, `event_invitations`, `event_attendees`, `event_rooms`, the `compute_match_score` function + matchmaking triggers + the `accessibility_flag` / `veteran_status` / `company_preference` / `age_range` / `invitation_*` / `attendee_status` enums) was applied via migrations `0001b/0004/0005/0007/0008` from a sibling repo, **outside this repo's `supabase/migrations/` directory**. Don't try to recreate it from here.
+> - **v1 lane** (`veterans`, `events`, `rsvps`, `notifications`, `bot_sessions`, `organizations`, `cities`, `discovery_sources`, `moderation_log`, `ratings`, `shares`, plus the `interest_category` / `event_status` / `notification_*` / `rsvp_status` / etc. enums) was created from this repo's `supabase/migrations/0001_init.sql` + `0002_rls.sql` + `0003_pg_cron_notify.sql` (M2 + M11 of the hackathon build). The primer describes those tables as "out-of-band legacy" because they were created outside the v2 repo's migration flow — but in **our repo** they are the canonical, version-controlled source.
+>
+> Practical implication for this repo's code:
+>
+> - Every M1–M15 surface (the bot, the public event page, /m/onboarding, /m/feed, /m/event/[slug], /m/propose, the admin panel, the eight Supabase Edge Functions, the seed) reads and writes the **v1 lane** exclusively. v2 is reachable from the same Postgres but no code path in this repo uses it yet.
+> - When you add new features, follow the primer's "build against v2" rule **only if you also add the v1↔v2 bridge** — otherwise wires get crossed (e.g. notifications.veteran_id is NOT NULL, so you can't enqueue from a v2 `users` row without modifying that table or adding a fan-out shim). For the hackathon demo we deliberately stayed on v1 end-to-end.
 
 ---
 
