@@ -480,8 +480,13 @@ The **combined** RSVP operation. One call:
 5. Returns the resulting `{ invitation, attendee, room }`.
 
 **Refuses** with `409 event_started` if `start_at` is in the past.
-**Sticky decline:** an existing `response = 'declined'` row cannot flip to
-`accepted` (`409 already_rsvped`).
+
+A user who previously declined can re-subscribe — the existing
+`event_invitations` row is updated with the new `response`. The dispatch
+worker still won't re-ping them via Telegram unprompted, because its
+insert path is on-conflict-do-nothing on the same `(event_id, user_id)`
+row, so user-initiated re-subscription is allowed without reopening
+the bot-side spam path.
 
 **Request:**
 

@@ -72,10 +72,12 @@ export async function rsvpToOpportunity(
 
   let invitation: InvitationRow;
   if (existingInv) {
-    // Sticky decline: never let a 'declined' row flip back to 'accepted'.
-    if (existingInv.response === 'declined' && input.response === 'accepted') {
-      throw AppError.conflict('Already declined', 'already_rsvped');
-    }
+    // The unique (event_id, user_id) row is the user's response ledger — any
+    // transition is allowed (declined → accepted, accepted → declined, etc.).
+    // We deliberately don't enforce sticky decline here: a user who re-opens
+    // the event and clicks "subscribe" wants in. The dispatch worker still
+    // won't re-ping them via Telegram unprompted because its insert path is
+    // on-conflict-do-nothing on the same row.
     const { data, error } = await supabaseAdmin
       .from('event_invitations')
       .update({ response: input.response, responded_at: nowIso })
