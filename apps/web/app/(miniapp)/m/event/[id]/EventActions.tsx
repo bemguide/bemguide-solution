@@ -31,6 +31,7 @@ import {
   setShowNamePublicly,
   type V2EventRoom,
 } from "@/lib/api";
+import { buildEventShareUrl } from "@/lib/share";
 import type { Attending } from "./ClientEventPage";
 
 const ROOM_POLL_INTERVAL_MS = 4000;
@@ -167,7 +168,7 @@ function AttendingBar({
   }
 
   async function onShareUrl() {
-    const shareUrl = `${window.location.origin}/event/${eventId}`;
+    const shareUrl = buildEventShareUrl(eventId);
     if (navigator.share) {
       try {
         await navigator.share({ title: eventTitle, url: shareUrl });
@@ -261,7 +262,7 @@ function DeclinedBar({
   const contactHref = buildOrganizerHref(organizerContact);
 
   async function onShareUrl() {
-    const shareUrl = `${window.location.origin}/event/${eventId}`;
+    const shareUrl = buildEventShareUrl(eventId);
     if (navigator.share) {
       try {
         await navigator.share({ title: eventTitle, url: shareUrl });
@@ -385,7 +386,7 @@ function RsvpBar({
   }
 
   async function onShareUrl() {
-    const shareUrl = `${window.location.origin}/event/${eventId}`;
+    const shareUrl = buildEventShareUrl(eventId);
     if (navigator.share) {
       try {
         await navigator.share({ title: eventTitle, url: shareUrl });
