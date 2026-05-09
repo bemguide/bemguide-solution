@@ -23,7 +23,6 @@ docs/PROMPTS/     Source-of-truth specs for each subsystem
 ```
 
 ## Quick start
-
 ```bash
 pnpm install
 cp .env.example .env.local           # fill in real values
