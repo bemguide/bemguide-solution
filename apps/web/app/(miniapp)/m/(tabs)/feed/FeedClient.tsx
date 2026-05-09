@@ -153,15 +153,13 @@ export function FeedClient() {
     );
   }
 
-  // Initial cold load with no cache yet — render the real shell with
-  // a quiet header. The header's RefreshCw is the only loading cue;
-  // the body stays empty until data lands. Skeleton placeholders read
-  // as filler and got AI-shaped feedback, so we lean on an empty
-  // viewport + spinning indicator (mobile-native pattern).
+  // Initial cold load with no cache yet — show a tight skeleton so
+  // there's something on screen within one frame.
   if (!sections) {
     return (
-      <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
+      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
         <FeedHeader city={city} refreshing />
+        <FeedSkeleton />
       </main>
     );
   }
@@ -261,6 +259,20 @@ function FeedHeader({
         {city?.[0] ?? "Я"}
       </Link>
     </header>
+  );
+}
+
+function FeedSkeleton() {
+  return (
+    <div className="space-y-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="space-y-2">
+          <div className="bg-muted aspect-[16/9] w-full animate-pulse rounded-xl" />
+          <div className="bg-muted h-4 w-3/4 animate-pulse rounded" />
+          <div className="bg-muted h-3 w-1/2 animate-pulse rounded" />
+        </div>
+      ))}
+    </div>
   );
 }
 

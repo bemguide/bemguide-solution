@@ -65,8 +65,9 @@ export function MeClient() {
   }, []);
 
   if (refreshing && !me) {
-    // Quiet shell during the first /me round-trip — header with a
-    // small spinner, body empty. Same pattern the feed uses.
+    // Skeleton during the first /me round-trip so the body isn't a
+    // wall of white. Mirrors the layout of the loaded view (profile
+    // card + upcoming list) so the swap doesn't reflow.
     return (
       <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-4">
         <header className="flex items-center justify-between">
@@ -75,6 +76,12 @@ export function MeClient() {
             <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
           </h1>
         </header>
+        <div className="bg-card border-border h-32 w-full animate-pulse rounded-2xl border" />
+        <div className="bg-muted h-4 w-32 animate-pulse rounded" />
+        <div className="space-y-2">
+          <div className="bg-card border-border h-16 w-full animate-pulse rounded-xl border" />
+          <div className="bg-card border-border h-16 w-full animate-pulse rounded-xl border" />
+        </div>
       </main>
     );
   }

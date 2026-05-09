@@ -36,6 +36,10 @@ export type TelegramWebApp = {
     show: () => void;
     hide: () => void;
     onClick: (cb: () => void) => void;
+    /** Bot API 6.1+. Older clients are missing offClick — use it
+     *  defensively so cleanup never throws. */
+    offClick?: (cb: () => void) => void;
+    isVisible?: boolean;
   };
   // LocationManager — Bot API 8.0+. Use this in preference to
   // navigator.geolocation inside the Mini App: browser geolocation often
