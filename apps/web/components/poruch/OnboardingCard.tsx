@@ -7,6 +7,7 @@
 
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { StepProgress } from "./StepProgress";
 
 export function OnboardingCard({
   step,
@@ -31,10 +32,8 @@ export function OnboardingCard({
 }) {
   return (
     <div className="bg-background flex h-full flex-col">
-      <header className="flex shrink-0 items-center justify-between px-5 pb-2 pt-5">
-        <span className="text-muted-foreground text-xs font-medium">
-          {step} з {total}
-        </span>
+      <header className="flex shrink-0 items-center gap-4 px-5 pb-2 pt-5">
+        <StepProgress step={step} total={total} />
         {onSkip ? (
           <button
             type="button"
@@ -46,14 +45,16 @@ export function OnboardingCard({
           </button>
         ) : null}
       </header>
-      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-6 pb-3 pt-3">
+      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-6 pb-3 pt-4">
         <div className="space-y-2">
           <h1 className="text-foreground text-2xl font-semibold leading-tight">{title}</h1>
-          {subtitle ? <p className="text-muted-foreground text-sm">{subtitle}</p> : null}
+          {subtitle ? (
+            <p className="text-muted-foreground text-sm leading-snug">{subtitle}</p>
+          ) : null}
         </div>
         <div className="flex-1">{children}</div>
       </main>
-      <div className="bg-background border-border/50 shrink-0 border-t px-6 pb-4 pt-3">
+      <div className="bg-background shrink-0 px-6 pb-5 pt-3">
         <Button
           type="button"
           size="lg"
