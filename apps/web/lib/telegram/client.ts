@@ -24,26 +24,7 @@ export function getTgUser(): { id?: number; firstName?: string; languageCode?: s
   };
 }
 
-/** Start param from t.me/<bot>?startapp=evt_<slug> deep links. */
+/** Start param from t.me/<bot>?startapp=evt_<id> deep links. */
 export function getStartParam(): string {
   return tg()?.initDataUnsafe?.start_param ?? "";
-}
-
-/** Wrapper that injects X-Telegram-InitData on every fetch. */
-export async function fetchWithInitData<T = unknown>(
-  url: string,
-  init: RequestInit = {},
-): Promise<{ status: number; json: T }> {
-  const headers = new Headers(init.headers ?? {});
-  headers.set("content-type", "application/json");
-  const initData = getInitData();
-  if (initData) headers.set("x-telegram-initdata", initData);
-  const res = await fetch(url, { ...init, headers });
-  let json: T;
-  try {
-    json = (await res.json()) as T;
-  } catch {
-    json = null as unknown as T;
-  }
-  return { status: res.status, json };
 }

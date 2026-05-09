@@ -1,37 +1,98 @@
-// /m/event/[slug] — miniapp event page.
-// Same layout as the public page (M8) plus a "чому це для тебе" AI block at the
-// top and a miniapp-style RSVP modal hooked to /api/rsvp/create.
+// Client-side event page for the Mini App. We can't SSR this because the
+// bearer token lives in sessionStorage — the same JS that bootstraps auth
+// in TgInit also has to do this fetch.
 
+"use client";
+
+import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { CalendarClock, MapPin, Phone, Send } from "lucide-react";
-import type { Metadata } from "next";
-import { getEventBySlug, getPublicRsvpCount } from "@/lib/queries";
 import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
+import {
+  ApiError,
+  exchangeInitData,
+  getOpportunity,
+  getOpportunityAttendees,
+  isSessionExpired,
+  type AttendeeSummary,
+  type OpportunityCard,
+} from "@/lib/api";
 import { EventActions } from "./EventActions";
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ slug: string }>;
-}): Promise<Metadata> {
-  const { slug } = await params;
-  const event = await getEventBySlug(slug).catch(() => null);
-  if (!event) return { title: "Поруч" };
-  return { title: `${event.title} — Поруч`, robots: { index: false } };
-}
+type LoadState =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; event: OpportunityCard; attendees: AttendeeSummary };
 
-export const dynamic = "force-dynamic";
+export function ClientEventPage({ id }: { id: string }) {
+  const [state, setState] = useState<LoadState>({ kind: "loading" });
 
-export default async function MiniappEventPage({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
-  const event = await getEventBySlug(slug);
-  if (!event) notFound();
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        if (isSessionExpired()) {
+          const initData =
+            (typeof window !== "undefined" &&
+              (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
+                ?.initData) ??
+            "";
+          if (initData) await exchangeInitData(initData);
+        }
+        const [event, attendees] = await Promise.all([
+          getOpportunity(id),
+          getOpportunityAttendees(id),
+        ]);
+        if (cancelled) return;
+        setState({ kind: "ready", event, attendees });
+      } catch (e) {
+        if (cancelled) return;
+        setState({
+          kind: "error",
+          message:
+            e instanceof ApiError && e.status === 404
+              ? "Цю подію не знайдено."
+              : e instanceof Error
+                ? e.message
+                : "Не вдалось завантажити подію.",
+        });
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
 
-  const rsvp = await getPublicRsvpCount(event.id);
+  if (state.kind === "loading") {
+    return (
+      <main className="flex flex-1 flex-col gap-3 px-4 pt-4">
+        <div className="bg-muted aspect-[16/10] w-full animate-pulse rounded-xl" />
+        <div className="bg-muted h-5 w-2/3 animate-pulse rounded" />
+        <div className="bg-muted h-4 w-1/2 animate-pulse rounded" />
+      </main>
+    );
+  }
+
+  if (state.kind === "error") {
+    return (
+      <main className="px-4 py-10 text-center">
+        <p className="text-foreground text-base">{state.message}</p>
+        <Link
+          href="/m/feed"
+          className="text-primary mt-4 inline-block text-sm underline-offset-2 hover:underline"
+        >
+          До стрічки
+        </Link>
+      </main>
+    );
+  }
+
+  const { event, attendees } = state;
+  const startDisplay = event.start_at ?? "";
 
   return (
     <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
@@ -56,20 +117,17 @@ export default async function MiniappEventPage({ params }: { params: Promise<{ s
           <h1 className="text-2xl font-semibold leading-tight">{event.title}</h1>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
             <CalendarClock className="h-4 w-4" aria-hidden />
-            <span>{formatEventDateTime(event.start_at)}</span>
+            <span>{formatEventDateTime(startDisplay)}</span>
             <span aria-hidden>·</span>
             <span>{event.city}</span>
             <span aria-hidden>·</span>
-            <span>{formatPrice(event.price_uah)}</span>
+            <span>{formatPrice(event.price_uah ?? 0)}</span>
           </p>
         </div>
       </div>
 
       <section className="px-4 py-4">
-        <AccessibilityStrip
-          flags={event.accessibility_flags}
-          honestAbsences={event.honest_absences}
-        />
+        <AccessibilityStrip flags={event.accessibility_flags} honestAbsences={null} />
       </section>
 
       {event.description ? (
@@ -83,8 +141,8 @@ export default async function MiniappEventPage({ params }: { params: Promise<{ s
 
       <section className="space-y-2 px-4 pb-4">
         <h2 className="text-foreground text-lg font-semibold">Хто йде</h2>
-        {rsvp.going_count > 0 ? (
-          <WhoIsGoing count={rsvp.going_count} namesVisible={rsvp.names_visible.slice(0, 6)} />
+        {attendees.count > 0 ? (
+          <WhoIsGoing count={attendees.count} namesVisible={attendees.names_visible.slice(0, 6)} />
         ) : (
           <p className="text-muted-foreground text-sm">
             Поки нікого. Будеш першим — інші підтягнуться.
@@ -125,10 +183,16 @@ export default async function MiniappEventPage({ params }: { params: Promise<{ s
 
       <EventActions
         eventId={event.id}
-        eventSlug={event.slug}
         eventTitle={event.title}
-        eventStartAt={event.start_at}
+        eventStartAt={startDisplay}
+        startedAlready={startedAlready(event.start_at)}
       />
     </main>
   );
+}
+
+function startedAlready(startAt: string | null): boolean {
+  if (!startAt) return false;
+  const t = Date.parse(startAt);
+  return !Number.isNaN(t) && t < Date.now();
 }

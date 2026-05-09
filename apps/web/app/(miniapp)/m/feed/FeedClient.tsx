@@ -1,58 +1,83 @@
-// Client-side feed loader. The data fetch must run after Telegram WebApp SDK
-// has initialised (so initData is available).
+// Client-side feed loader. Talks to the v2 backend via @/lib/api.
+// `getFeed` requires the session token that TgInit has already exchanged
+// (or will be in the process of exchanging — we retry once on 401).
 
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Plus, ChevronRight, Sparkles } from "lucide-react";
-import { fetchWithInitData } from "@/lib/telegram/client";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
+import {
+  ApiError,
+  exchangeInitData,
+  getCurrentUser,
+  getFeed,
+  isSessionExpired,
+  opportunityToDisplay,
+  type FeedSections as V2FeedSections,
+} from "@/lib/api";
 import type { EventForDisplay } from "@/lib/types";
 
-type Sections = {
-  today_tomorrow: (EventForDisplay & { ai_reason?: string })[];
-  this_week: (EventForDisplay & { ai_reason?: string })[];
-  try_new: (EventForDisplay & { ai_reason?: string })[];
+type DisplaySections = {
+  today_tomorrow: EventForDisplay[];
+  this_week: EventForDisplay[];
+  try_new: EventForDisplay[];
 };
 
-type FeedResp = {
-  ok: boolean;
-  city?: string;
-  sections?: Sections;
-  error?: string;
-};
+function adapt(sections: V2FeedSections): DisplaySections {
+  return {
+    today_tomorrow: sections.today_tomorrow.map(opportunityToDisplay),
+    this_week: sections.this_week.map(opportunityToDisplay),
+    try_new: sections.try_new.map(opportunityToDisplay),
+  };
+}
 
 export function FeedClient() {
   const [loading, setLoading] = useState(true);
   const [city, setCity] = useState<string | undefined>();
-  const [sections, setSections] = useState<Sections | null>(null);
+  const [sections, setSections] = useState<DisplaySections | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Avoid double-fetch in React strict mode (dev) and StrictMode unmount/remount.
+  const ranRef = useRef(false);
 
   useEffect(() => {
+    if (ranRef.current) return;
+    ranRef.current = true;
+
     let cancelled = false;
     async function load() {
-      const { status, json } = await fetchWithInitData<FeedResp>("/api/feed", {
-        method: "GET",
-      });
-      if (cancelled) return;
-      if (status === 401) {
-        setError("Авторизація через Telegram не пройшла. Закрий і відкрий додаток ще раз.");
+      try {
+        // If TgInit hasn't finished the exchange yet, do it ourselves.
+        if (isSessionExpired()) {
+          const initData =
+            (typeof window !== "undefined" &&
+              (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
+                ?.initData) ??
+            "";
+          if (initData) await exchangeInitData(initData);
+        }
+        const me = await getCurrentUser().catch(() => null);
+        if (cancelled) return;
+        const myCity = me?.city ?? undefined;
+        const v2 = await getFeed({ city: myCity });
+        if (cancelled) return;
+        setCity(myCity);
+        setSections(adapt(v2));
         setLoading(false);
-        return;
-      }
-      if (!json?.ok || !json.sections) {
-        setError(json?.error ?? "Щось пішло не так. Спробуй ще раз.");
+      } catch (e) {
+        if (cancelled) return;
+        if (e instanceof ApiError && e.status === 401) {
+          setError("Авторизація через Telegram не пройшла. Закрий і відкрий додаток ще раз.");
+        } else {
+          setError(e instanceof Error ? friendlyError(e) : "Щось пішло не так. Спробуй ще раз.");
+        }
         setLoading(false);
-        return;
       }
-      setCity(json.city);
-      setSections(json.sections);
-      setLoading(false);
     }
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
@@ -170,6 +195,17 @@ export function FeedClient() {
       </Link>
     </main>
   );
+}
+
+function friendlyError(e: Error): string {
+  if (e instanceof ApiError) {
+    if (e.message === "NEXT_PUBLIC_API_BASE is not set") {
+      return "Бекенд ще не підключений. Перевір NEXT_PUBLIC_API_BASE.";
+    }
+    if (e.status === 0) return "Не вдалось дістатися сервера.";
+    if (e.status >= 500) return "Сервер тимчасово не відповідає. Спробуй за хвилину.";
+  }
+  return e.message;
 }
 
 function FeedSkeleton() {

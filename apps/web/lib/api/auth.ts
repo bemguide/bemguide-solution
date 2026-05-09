@@ -1,12 +1,13 @@
 // Auth helper — exchanges Telegram initData for a backend session token.
-// PLACEHOLDER PATH: update when the backend team publishes the real one.
+// Backend is HS256, ~24h TTL, no refresh token. When the JWT expires we
+// re-call this with a fresh initData (cheap, the bot token is stable).
 
 "use client";
 
 import { apiFetch, setSession, clearSession, getToken, isSessionExpired } from "./client";
 import type { AuthExchangeResponse } from "./types";
 
-const AUTH_PATH = "/auth/telegram"; // PLACEHOLDER — confirm with backend.
+const AUTH_PATH = "/auth/telegram";
 
 /**
  * Trade Telegram initData for a session token. Idempotent: if a non-expired

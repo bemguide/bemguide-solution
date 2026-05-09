@@ -1,69 +1,82 @@
-// Sticky CTA bar + RSVP confirm modal for the miniapp event page.
-// Tap "Я буду" → if the veteran has no display_name yet, ask inline once;
-// then POST /api/rsvp/create and open the confirm sheet with calendar/QR/maps.
+// Sticky CTA bar + RSVP confirm sheet for the miniapp event page.
+// Talks to the v2 backend's combined RSVP endpoint:
+//   POST /opportunities/:id/rsvp { response, display_name?, show_name_publicly? }
+// On accept the room is provisioned async by the backend's worker — we
+// poll GET /opportunities/:id/room until chat_provider is non-null and
+// surface the join link when it lands.
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { Bell, Calendar, MapPin, QrCode, Share2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bell, Calendar, MapPin, MessageCircle, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { fetchWithInitData, getTgUser } from "@/lib/telegram/client";
+import { getTgUser } from "@/lib/telegram/client";
 import { formatEventDateTime } from "@/lib/format";
+import {
+  ApiError,
+  getRoom,
+  rsvp,
+  setShowNamePublicly,
+  type V2EventRoom,
+} from "@/lib/api";
 
-type RsvpResp = {
-  ok: boolean;
-  rsvp_id?: string;
-  qr_token?: string;
-  status?: string;
-  error?: string;
+type Confirmed = {
+  attendeeShown: boolean;
+  room: V2EventRoom | null;
 };
+
+const ROOM_POLL_INTERVAL_MS = 4000;
+const ROOM_POLL_MAX_ATTEMPTS = 30; // ≈2 minutes of polling
 
 export function EventActions({
   eventId,
-  eventSlug,
   eventTitle,
   eventStartAt,
+  startedAlready,
 }: {
   eventId: string;
-  eventSlug: string;
   eventTitle: string;
   eventStartAt: string;
+  startedAlready: boolean;
 }) {
   const [needsName, setNeedsName] = useState(false);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [confirmed, setConfirmed] = useState<{
-    rsvpId: string;
-    qrToken: string;
-  } | null>(null);
+  const [confirmed, setConfirmed] = useState<Confirmed | null>(null);
   const [showName, setShowName] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const pollRef = useRef<{ cancel: () => void } | null>(null);
 
   useEffect(() => {
     setName(getTgUser().firstName ?? "");
   }, []);
 
-  async function confirmRsvp(displayName?: string) {
+  // Stop any active room poll on unmount.
+  useEffect(() => {
+    return () => pollRef.current?.cancel();
+  }, []);
+
+  async function confirmRsvp(displayName: string) {
     setBusy(true);
     setError(null);
     try {
-      const { status, json } = await fetchWithInitData<RsvpResp>("/api/rsvp/create", {
-        method: "POST",
-        body: JSON.stringify({
-          event_id: eventId,
-          ...(displayName ? { display_name: displayName } : {}),
-        }),
+      const res = await rsvp(eventId, {
+        response: "accepted",
+        display_name: displayName,
+        show_name_publicly: false,
       });
-      if (status !== 200 || !json?.ok || !json.rsvp_id || !json.qr_token) {
-        setError(json?.error ?? "Не вдалось записати. Спробуй ще раз.");
-        return;
-      }
-      setConfirmed({ rsvpId: json.rsvp_id, qrToken: json.qr_token });
+      setConfirmed({ attendeeShown: false, room: res.room });
       setNeedsName(false);
+      // If the backend hasn't materialised the room yet, poll for it.
+      if (!res.room || !res.room.chat_provider) {
+        startRoomPoll();
+      }
+    } catch (e) {
+      setError(rsvpErrorToMessage(e));
     } finally {
       setBusy(false);
     }
@@ -73,25 +86,19 @@ export function EventActions({
     setBusy(true);
     setError(null);
     try {
-      const { status, json } = await fetchWithInitData<RsvpResp>("/api/rsvp/create", {
-        method: "POST",
-        body: JSON.stringify({ event_id: eventId, defer: true }),
-      });
-      if (status !== 200 || !json?.ok) {
-        setError(json?.error ?? "Не вдалось зберегти.");
-        return;
-      }
+      // The combined RSVP endpoint doesn't have a "defer" action; the
+      // closest semantic is dismissing without responding. Just close the
+      // sheet — the invitation row stays in `delivery_status='sent'` and
+      // the caller can come back later.
       setError(null);
-      // Show a toast-like message using the same modal sheet.
-      setConfirmed(null);
-      alert("Окей, нагадаю через тиждень.");
+      alert("Окей, нагадаю напередодні.");
     } finally {
       setBusy(false);
     }
   }
 
   async function onShareUrl() {
-    const shareUrl = `${window.location.origin}/event/${eventSlug}`;
+    const shareUrl = `${window.location.origin}/event/${eventId}`;
     if (navigator.share) {
       try {
         await navigator.share({ title: eventTitle, url: shareUrl });
@@ -108,21 +115,49 @@ export function EventActions({
   }
 
   function onPrimaryClick() {
+    if (startedAlready) return;
     if (!name) {
       setNeedsName(true);
       return;
     }
-    confirmRsvp(name.trim());
+    void confirmRsvp(name.trim());
   }
 
   async function toggleShowName(next: boolean) {
     setShowName(next);
-    // Per-event override on the rsvps row.
     if (!confirmed) return;
-    await fetchWithInitData("/api/rsvp/show-name", {
-      method: "POST",
-      body: JSON.stringify({ rsvp_id: confirmed.rsvpId, show: next }),
-    });
+    try {
+      await setShowNamePublicly(eventId, next);
+    } catch (e) {
+      console.warn("show-name update failed:", e);
+    }
+  }
+
+  function startRoomPoll() {
+    pollRef.current?.cancel();
+    let cancelled = false;
+    let attempts = 0;
+    const tick = async () => {
+      if (cancelled) return;
+      attempts++;
+      try {
+        const room = await getRoom(eventId);
+        if (cancelled) return;
+        if (room && room.chat_provider) {
+          setConfirmed((c) => (c ? { ...c, room } : c));
+          return;
+        }
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[room-poll]", e);
+        }
+      }
+      if (attempts < ROOM_POLL_MAX_ATTEMPTS) {
+        window.setTimeout(tick, ROOM_POLL_INTERVAL_MS);
+      }
+    };
+    pollRef.current = { cancel: () => (cancelled = true) };
+    window.setTimeout(tick, ROOM_POLL_INTERVAL_MS);
   }
 
   return (
@@ -134,9 +169,9 @@ export function EventActions({
             size="lg"
             className="h-14 w-full text-base font-semibold"
             onClick={onPrimaryClick}
-            disabled={busy}
+            disabled={busy || startedAlready}
           >
-            Я буду
+            {startedAlready ? "Уже почалося" : "Я буду"}
           </Button>
           <div className="grid grid-cols-2 gap-2">
             <Button type="button" variant="outline" className="h-11" onClick={onShareUrl}>
@@ -148,7 +183,7 @@ export function EventActions({
               variant="outline"
               className="h-11"
               onClick={deferRsvp}
-              disabled={busy}
+              disabled={busy || startedAlready}
             >
               <Bell className="mr-1.5 h-4 w-4" aria-hidden />
               Не зараз
@@ -173,7 +208,7 @@ export function EventActions({
             type="button"
             size="lg"
             className="h-12 w-full"
-            onClick={() => name.trim() && confirmRsvp(name.trim())}
+            onClick={() => name.trim() && void confirmRsvp(name.trim())}
             disabled={busy || !name.trim()}
           >
             Записати
@@ -181,7 +216,7 @@ export function EventActions({
         </SheetContent>
       </Sheet>
 
-      {/* Confirm sheet with calendar / QR / maps */}
+      {/* Confirm sheet */}
       <Sheet open={!!confirmed} onOpenChange={(o) => !o && setConfirmed(null)}>
         <SheetContent side="bottom" className="space-y-4 px-5 pb-10 pt-6">
           <div className="bg-primary/10 mx-auto flex h-12 w-12 items-center justify-center rounded-full">
@@ -194,36 +229,29 @@ export function EventActions({
           </p>
           {confirmed ? (
             <div className="space-y-2">
-              <Button
-                asChild
-                variant="outline"
-                size="lg"
-                className="border-primary/30 text-primary h-12 w-full justify-start"
-              >
-                <a
-                  href={icsUrl(confirmed.rsvpId, confirmed.qrToken)}
-                  target="_blank"
-                  rel="noopener noreferrer"
+              {confirmed.room?.chat_invite_url ? (
+                <Button asChild size="lg" className="h-12 w-full justify-start">
+                  <a
+                    href={confirmed.room.chat_invite_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <MessageCircle className="mr-2 h-4 w-4" aria-hidden />
+                    Чат події
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  className="border-primary/30 text-muted-foreground h-12 w-full justify-start"
+                  disabled
                 >
-                  <Calendar className="mr-2 h-4 w-4" aria-hidden />
-                  Додати в календар
-                </a>
-              </Button>
-              <Button
-                asChild
-                variant="outline"
-                size="lg"
-                className="border-primary/30 text-primary h-12 w-full justify-start"
-              >
-                <a
-                  href={qrUrl(confirmed.rsvpId, confirmed.qrToken)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <QrCode className="mr-2 h-4 w-4" aria-hidden />
-                  Мій QR
-                </a>
-              </Button>
+                  <MessageCircle className="mr-2 h-4 w-4" aria-hidden />
+                  Чат готується…
+                </Button>
+              )}
               <Button
                 asChild
                 variant="outline"
@@ -269,23 +297,12 @@ export function EventActions({
   );
 }
 
-function icsUrl(rsvpId: string, qrToken: string): string {
-  const base =
-    process.env.NEXT_PUBLIC_SUPABASE_FN_URL ??
-    (typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.host.replace(/^/, "")}`
-      : "");
-  // Construct against the Supabase functions origin from a runtime hint baked at build.
-  const fnRoot =
-    process.env.NEXT_PUBLIC_FUNCTIONS_BASE ??
-    "https://rwpzgsooevcmfcjaiqsy.supabase.co/functions/v1";
-  void base;
-  return `${fnRoot}/ics-generate?rsvp_id=${encodeURIComponent(rsvpId)}&token=${encodeURIComponent(qrToken)}`;
-}
-
-function qrUrl(rsvpId: string, qrToken: string): string {
-  // Inline QR via the public api.qrserver.com generator. The QR encodes the
-  // rsvp's check-in URL, scoped to the org.
-  const target = `https://t.me/?start=rsvp_${rsvpId}_${qrToken}`;
-  return `https://api.qrserver.com/v1/create-qr-code/?size=320x320&data=${encodeURIComponent(target)}`;
+function rsvpErrorToMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.message === "event_started") return "Подія вже почалася.";
+    if (e.message === "already_rsvped") return "Ти вже відповів на цю подію.";
+    if (e.status === 401) return "Сесія завершилась — закрий і відкрий додаток.";
+    if (e.status >= 500) return "Сервер тимчасово не відповідає. Спробуй ще раз.";
+  }
+  return "Не вдалось записати. Спробуй ще раз.";
 }

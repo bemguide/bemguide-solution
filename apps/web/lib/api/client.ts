@@ -3,9 +3,10 @@
 // live in sessionStorage, so they're scoped to the Mini App's tab and
 // die when Telegram closes the webview.
 //
-// All paths below are PLACEHOLDERS — swap to the real endpoints when the
-// backend team publishes their contract. Search for "PLACEHOLDER" to find
-// the spots that need updating.
+// Error envelope: `{ ok: false, error, message, details }`. We surface
+// `error` as the ApiError.message (machine-readable code) and stash the
+// whole body on `.body`. UI strings come from a translation table keyed
+// off the code — backend doesn't localise.
 
 "use client";
 
@@ -98,11 +99,11 @@ export async function apiFetch<T>(path: string, opts: RequestOpts = {}): Promise
     parsed = text;
   }
   if (!res.ok) {
-    const message =
-      (typeof parsed === "object" && parsed && "error" in parsed
+    const code =
+      typeof parsed === "object" && parsed && "error" in parsed
         ? String((parsed as { error: unknown }).error)
-        : null) ?? `HTTP ${res.status}`;
-    throw new ApiError(res.status, message, parsed);
+        : null;
+    throw new ApiError(res.status, code ?? `HTTP ${res.status}`, parsed);
   }
   return parsed as T;
 }

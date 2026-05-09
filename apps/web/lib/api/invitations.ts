@@ -1,15 +1,21 @@
-// PLACEHOLDER paths for the RSVP / invitation flow. The backend writes the
-// `event_invitations.response` and (on accept) creates the matching
-// `event_attendees` row + queues `event_rooms` provisioning via its triggers.
+// RSVP / invitation / room flow. POST /opportunities/:id/rsvp is the
+// combined operation: it upserts event_invitations.response, creates the
+// event_attendees row on accept, and the DB trigger materialises an
+// event_rooms shell that the rooms-provisioning worker fills in.
+//
+// Behaviour rules baked into the backend:
+//   - 409 event_started if start_at < now()
+//   - 409 already_rsvped if existing response = 'declined' (sticky)
+//   - room.chat_provider is null until the worker runs — frontend polls.
 
 "use client";
 
 import { apiFetch } from "./client";
 import type { AttendeeStatus, V2EventAttendee, V2EventInvitation, V2EventRoom } from "./types";
 
-const RSVP = (eventId: string) => `/opportunities/${eventId}/rsvp`; // PLACEHOLDER
-const ROOM = (eventId: string) => `/opportunities/${eventId}/room`; // PLACEHOLDER
-const ATTENDEE_NAME = (eventId: string) => `/opportunities/${eventId}/attendee/show-name`; // PLACEHOLDER
+const RSVP = (eventId: string) => `/opportunities/${eventId}/rsvp`;
+const ROOM = (eventId: string) => `/opportunities/${eventId}/room`;
+const ATTENDEE_NAME = (eventId: string) => `/opportunities/${eventId}/attendee/show-name`;
 
 export type RsvpRequest = {
   response: "accepted" | "declined";

@@ -1,27 +1,44 @@
-// Public event page (`/event/[slug]`).
+// Public event page (`/event/[id]`).
 // SSR. No login required — built for sharing via Viber/Telegram/Instagram.
 // The "Я буду" button deep-links into the bot for users who aren't already in the Mini App.
 
 import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CalendarClock, MapPin, Phone, Send, Users } from "lucide-react";
+import { CalendarClock, MapPin, Phone, Send } from "lucide-react";
 import type { Metadata } from "next";
 import { serverEnv } from "@/lib/env";
-import { getEventBySlug, getPublicRsvpCount, getNextSimilarEvent } from "@/lib/queries";
-import { formatEventDateTime, formatPrice, formatRelativeWhen, initials } from "@/lib/format";
+import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
-import { MiniEventCard } from "@/components/poruch/EventCard";
+import { ApiError, type AttendeeSummary, type OpportunityCard } from "@/lib/api";
+import { serverGet } from "@/lib/api/server";
 import { CtaBar } from "./CtaBar";
+
+async function fetchEvent(id: string): Promise<OpportunityCard | null> {
+  try {
+    return await serverGet<OpportunityCard>(`/opportunities/${id}`, { revalidate: 60 });
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+async function fetchAttendees(id: string): Promise<AttendeeSummary> {
+  try {
+    return await serverGet<AttendeeSummary>(`/opportunities/${id}/attendees`, { revalidate: 30 });
+  } catch {
+    return { count: 0, names_visible: [] };
+  }
+}
 
 export async function generateMetadata({
   params,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const { slug } = await params;
-  const event = await getEventBySlug(slug).catch(() => null);
+  const { id } = await params;
+  const event = await fetchEvent(id).catch(() => null);
   if (!event) return { title: "Поруч" };
   return {
     title: `${event.title} — Поруч`,
@@ -36,27 +53,31 @@ export async function generateMetadata({
   };
 }
 
-export default async function PublicEventPage({ params }: { params: Promise<{ slug: string }> }) {
-  const { slug } = await params;
-  const event = await getEventBySlug(slug);
+export const dynamic = "force-dynamic";
+
+export default async function PublicEventPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const event = await fetchEvent(id);
   if (!event) notFound();
 
-  const eventEnded = new Date(event.start_at).getTime() + event.duration_min * 60_000 < Date.now();
+  const startMs = event.start_at ? Date.parse(event.start_at) : NaN;
+  const endMs =
+    !Number.isNaN(startMs) && event.duration_min
+      ? startMs + event.duration_min * 60_000
+      : NaN;
+  const eventEnded = !Number.isNaN(endMs) && endMs < Date.now();
 
-  const [rsvpCount, nextSimilar] = await Promise.all([
-    getPublicRsvpCount(event.id),
-    eventEnded ? getNextSimilarEvent(event) : Promise.resolve(null),
-  ]);
+  const attendees = await fetchAttendees(id);
 
   const env = serverEnv();
   const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? "";
   const deepLink = botUsername
-    ? `https://t.me/${botUsername}?start=evt_${event.slug}`
-    : `${env.NEXT_PUBLIC_APP_URL}/m/event/${event.slug}`;
+    ? `https://t.me/${botUsername}?start=evt_${event.id}`
+    : `${env.NEXT_PUBLIC_APP_URL}/m/event/${event.id}`;
   const deferLink = botUsername
-    ? `https://t.me/${botUsername}?start=defer_${event.slug}`
+    ? `https://t.me/${botUsername}?start=defer_${event.id}`
     : deepLink;
-  const shareUrl = `${env.NEXT_PUBLIC_APP_URL}/event/${event.slug}`;
+  const shareUrl = `${env.NEXT_PUBLIC_APP_URL}/event/${event.id}`;
 
   return (
     <main className="bg-background mx-auto flex min-h-screen w-full max-w-md flex-col pb-32">
@@ -82,11 +103,11 @@ export default async function PublicEventPage({ params }: { params: Promise<{ sl
           <h1 className="text-2xl font-semibold leading-tight">{event.title}</h1>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
             <CalendarClock className="h-4 w-4" aria-hidden />
-            <span>{formatEventDateTime(event.start_at)}</span>
+            <span>{formatEventDateTime(event.start_at ?? "")}</span>
             <span aria-hidden>·</span>
             <span>{event.city}</span>
             <span aria-hidden>·</span>
-            <span>{formatPrice(event.price_uah)}</span>
+            <span>{formatPrice(event.price_uah ?? 0)}</span>
           </p>
         </div>
       </div>
@@ -94,20 +115,12 @@ export default async function PublicEventPage({ params }: { params: Promise<{ sl
       {eventEnded ? (
         <div className="bg-muted text-muted-foreground border-border mx-4 mt-3 rounded-md border p-3 text-sm">
           Цей вже відбувся.
-          {nextSimilar ? (
-            <span className="mt-1 block">
-              Ось наступна схожа: <MiniEventCard event={nextSimilar} surface="public" />
-            </span>
-          ) : null}
         </div>
       ) : null}
 
       {/* Accessibility strip */}
       <section className="px-4 py-4">
-        <AccessibilityStrip
-          flags={event.accessibility_flags}
-          honestAbsences={event.honest_absences}
-        />
+        <AccessibilityStrip flags={event.accessibility_flags} honestAbsences={null} />
       </section>
 
       {/* Description */}
@@ -123,10 +136,10 @@ export default async function PublicEventPage({ params }: { params: Promise<{ sl
       {/* Who is going */}
       <section className="space-y-2 px-4 pb-4">
         <h2 className="text-foreground text-lg font-semibold">Хто йде</h2>
-        {rsvpCount.going_count > 0 ? (
+        {attendees.count > 0 ? (
           <WhoIsGoing
-            count={rsvpCount.going_count}
-            namesVisible={rsvpCount.names_visible.slice(0, 6)}
+            count={attendees.count}
+            namesVisible={attendees.names_visible.slice(0, 6)}
           />
         ) : (
           <p className="text-muted-foreground text-sm">
@@ -180,12 +193,3 @@ export default async function PublicEventPage({ params }: { params: Promise<{ sl
     </main>
   );
 }
-
-// Tiny helper kept here — used only by this route.
-export const dynamic = "force-dynamic";
-const _unusedInitials = initials;
-const _unusedRelative = formatRelativeWhen;
-const _unusedUsers = Users;
-void _unusedInitials;
-void _unusedRelative;
-void _unusedUsers;

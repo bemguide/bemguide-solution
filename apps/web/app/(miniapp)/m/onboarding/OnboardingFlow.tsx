@@ -1,5 +1,12 @@
-// Three-step onboarding (city / interests / comfort). Each step calls
-// /api/veteran/upsert optimistically. The final step also marks onboarded_at.
+// Three-step onboarding: city / interests / comfort. Each step PATCHes
+// /me with the partial answer; the recompute trigger rebuilds
+// event_matches under the hood so the next /feed call is already
+// personalised.
+//
+// Deep-link contract: bot start params:
+//   - `evt_<uuid>`   → skip onboarding, jump straight to /m/event/<uuid>
+//   - `defer_<uuid>` → skip onboarding to /m/feed
+// We accept these but DON'T include them in the call to PATCH /me.
 
 "use client";
 
@@ -20,8 +27,15 @@ import {
 } from "@poruch/shared";
 import { OnboardingCard } from "@/components/poruch/OnboardingCard";
 import { Label } from "@/components/ui/label";
-import { fetchWithInitData, getStartParam, getTgUser } from "@/lib/telegram/client";
+import { getStartParam, getTgUser } from "@/lib/telegram/client";
 import { cn } from "@/lib/utils";
+import {
+  ApiError,
+  exchangeInitData,
+  isSessionExpired,
+  updateCurrentUser,
+  type UserPatch,
+} from "@/lib/api";
 
 type StepState = {
   city: string;
@@ -56,10 +70,31 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+// Map our local IdentityPref enum to the backend's identity_pref enum
+// values. They line up 1:1 today, but keep the cast central so a future
+// schema split is easy to spot.
+function toBackendIdentity(p: IdentityPref): UserPatch["company_preference"] {
+  // company_preference is a separate enum; identity_pref isn't directly
+  // settable on /me. The closest analogue from our 3-step UI is
+  // "with whom is comfortable" → company_preference.
+  switch (p) {
+    case "women_only":
+      return "women_only";
+    case "any":
+      return "any";
+    default:
+      // mixed_with_women_emphasis / men_only / family_friendly all collapse
+      // to "mixed" on the user record (their target side lives on the
+      // opportunity).
+      return "mixed";
+  }
+}
+
 export function OnboardingFlow() {
   const router = useRouter();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [state, setState] = useState<StepState>({
     city: "",
     interests: [],
@@ -72,7 +107,7 @@ export function OnboardingFlow() {
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
-  // Deep-link bypass: start_param=evt_<slug>  → skip onboarding to event page.
+  // Deep-link bypass: start_param=evt_<id> → skip onboarding to event page.
   useEffect(() => {
     const param = getStartParam();
     if (param.startsWith("evt_")) {
@@ -90,15 +125,37 @@ export function OnboardingFlow() {
 
   if (bypassed) return null;
 
-  async function persistAndAdvance(patch: Record<string, unknown>, next: 1 | 2 | 3 | "done") {
-    setBusy(true);
+  async function persist(patch: UserPatch): Promise<boolean> {
     try {
-      const { status, json } = await fetchWithInitData<{ ok: boolean; error?: string }>(
-        "/api/veteran/upsert",
-        { method: "POST", body: JSON.stringify(patch) },
-      );
-      if (status !== 200 || !json?.ok) {
-        console.warn("upsert failed:", json?.error);
+      // If the SDK hasn't bootstrapped auth yet, do it inline. Without a
+      // token PATCH /me would 401.
+      if (isSessionExpired()) {
+        const initData =
+          (typeof window !== "undefined" &&
+            (window as { Telegram?: { WebApp?: { initData?: string } } }).Telegram?.WebApp
+              ?.initData) ??
+          "";
+        if (initData) await exchangeInitData(initData);
+      }
+      await updateCurrentUser(patch);
+      return true;
+    } catch (e) {
+      // Non-fatal: log and let the user keep going. Onboarding is
+      // skip-able; we don't want to gate the user behind a backend hiccup.
+      console.warn("onboarding patch failed:", e);
+      if (e instanceof ApiError && e.status === 401) {
+        setError("Сесія завершилась. Закрий і відкрий додаток ще раз.");
+      }
+      return false;
+    }
+  }
+
+  async function persistAndAdvance(patch: UserPatch, next: 1 | 2 | 3 | "done") {
+    setBusy(true);
+    setError(null);
+    try {
+      if (Object.keys(patch).length > 0) {
+        await persist(patch);
       }
       if (next === "done") {
         router.push("/m/feed");
@@ -148,6 +205,12 @@ export function OnboardingFlow() {
 
   return (
     <>
+      {error ? (
+        <div className="bg-destructive/10 text-destructive border-destructive/30 mx-4 mt-2 rounded-md border px-3 py-2 text-sm">
+          {error}
+        </div>
+      ) : null}
+
       {step === 1 ? (
         <OnboardingCard
           step={1}
@@ -181,7 +244,12 @@ export function OnboardingFlow() {
           subtitle="Можна вибрати кілька. Або жодного — все одно покажемо."
           primaryLabel="Далі"
           busy={busy}
-          onPrimary={() => persistAndAdvance({ interests: state.interests }, 3)}
+          onPrimary={() =>
+            persistAndAdvance(
+              { interests: state.interests as unknown as string[] },
+              3,
+            )
+          }
           onSkip={() => persistAndAdvance({}, 3)}
         >
           <InterestStep
@@ -202,15 +270,14 @@ export function OnboardingFlow() {
           onPrimary={() =>
             persistAndAdvance(
               {
-                identity_prefs: state.identity,
+                company_preference: toBackendIdentity(state.identity),
                 accessibility_flags: state.accessibility,
-                comfort_notes: state.comfort.trim() ? state.comfort.trim() : null,
-                mark_onboarded: true,
+                bio: state.comfort.trim() || null,
               },
               "done",
             )
           }
-          onSkip={() => persistAndAdvance({ mark_onboarded: true }, "done")}
+          onSkip={() => persistAndAdvance({}, "done")}
         >
           <ComfortStep
             open={comfortOpen}

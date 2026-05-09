@@ -1,6 +1,13 @@
-// v2 API types. Mirrors `docs/SCHEMA.md` so the wire shapes match the v2
-// Postgres tables one-for-one. Update both files together when the schema
-// shifts.
+// v2 API types. Mirrors what `auth-backend` returns (and `docs/SCHEMA.md`).
+// Update both files together when the schema shifts.
+//
+// Wire conventions worth remembering:
+//   - Timestamps: ISO `…Z` for createdAt/updatedAt; `opportunities.start_at`
+//     and `ends_at` come back with explicit `+03:00` (Europe/Kyiv).
+//   - Decline is sticky: once `event_invitations.response = 'declined'`,
+//     POST /opportunities/:id/rsvp can't flip it back to 'accepted'.
+//   - `OpportunityCard.distance_km` is always `null` on the wire; the
+//     frontend computes it from the user's geolocation when available.
 
 // ---------------------------------------------------------------
 // Enums
@@ -83,17 +90,20 @@ export type V2Opportunity = {
   address: string | null;
   location_lat: number;
   location_lng: number;
-  /** Naive timestamp string (no tz) — caller normalises to Europe/Kyiv. */
+  /** ISO timestamp with `+03:00` offset (Europe/Kyiv). */
   start_at: string | null;
   duration_min: number | null;
-  /** Generated column = start_at + duration_min. Read-only. */
+  /** Generated column = start_at + duration_min. Read-only. Same offset. */
   ends_at: string | null;
+  /** Free-form interest tags — backend stores `text[]`, no enum gate. */
   interests: string[];
   accessibility_flags: AccessibilityFlag[];
   price_uah: number | null;
   organizer_contact: string | null;
+  /** [] = no preference. Multi-select. */
   target_age_range: AgeRange[];
   target_identity_pref: IdentityPref;
+  /** [] = no preference. Multi-select. */
   target_veteran_status: VeteranStatus[];
   created_at: string;
   updated_at: string;
@@ -148,14 +158,15 @@ export type V2EventRoom = {
 
 /** Opportunity decorated with derived/aggregated fields the feed needs. */
 export type OpportunityCard = V2Opportunity & {
-  /** Personalisation: included when the request was authed. */
+  /** Personalisation: omitted (not null) when the request was unauthed. */
   match_score?: number;
+  /** Backend-computed via Gemini; empty string when GEMINI_API_KEY unset. */
   ai_reason?: string;
-  /** count of accepted attendees (includes ghost rows from seed). */
+  /** Count of joining + attended event_attendees rows. */
   attendee_count?: number;
-  /** opt-in display_names from accepted attendees (subset only). */
+  /** ≤12 opt-in display_names (double opt-in: user.show_name_publicly AND attendee.show_name_publicly). */
   names_visible?: string[];
-  /** km from the requesting user's city centroid. */
+  /** Always `null` on the wire — frontend computes from user geolocation. */
   distance_km?: number | null;
 };
 

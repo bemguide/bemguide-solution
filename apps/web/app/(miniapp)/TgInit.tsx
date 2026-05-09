@@ -23,6 +23,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { exchangeInitData } from "@/lib/api";
 
 type FullscreenFailedData = { error?: string };
 
@@ -42,6 +43,7 @@ type WebAppLike = {
   isVersionAtLeast?: (version: string) => boolean;
   platform?: string;
   version?: string;
+  initData?: string;
 };
 
 // Pin to the latest Telegram-published cache-buster. Bumping the suffix
@@ -125,6 +127,20 @@ export function TgInit() {
       // 6.0 baseline — every host has these.
       callQuiet("ready", () => wa.ready());
       callQuiet("expand", () => wa.expand());
+
+      // Trade initData for a backend session token. Idempotent — the
+      // helper short-circuits when an unexpired token is already in
+      // sessionStorage. Failures are non-fatal: the rest of the SDK
+      // wiring still runs, and individual API calls will surface their
+      // own errors.
+      const initData = wa.initData ?? "";
+      if (initData) {
+        exchangeInitData(initData).catch((err: unknown) => {
+          console.warn("[TgInit] exchangeInitData failed:", err);
+        });
+      } else if (process.env.NODE_ENV !== "production") {
+        console.debug("[TgInit] no initData on the WebApp — skipping auth exchange");
+      }
 
       // Each modern API is gated by the host's reported Bot API version.
       // Without gating, Telegram's SDK calls console.error("Method X is not

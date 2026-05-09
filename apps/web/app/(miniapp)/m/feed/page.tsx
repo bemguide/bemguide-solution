@@ -1,5 +1,6 @@
-// /m/feed — miniapp home. Thin server shell + client-side fetch of /api/feed
-// (initData lives in window.Telegram.WebApp, so the data fetch must happen client-side).
+// /m/feed — miniapp home. Thin server shell + a client-side fetch
+// against the v2 backend (the bearer token lives in sessionStorage so
+// the request has to go through the browser).
 
 import { FeedClient } from "./FeedClient";
 
