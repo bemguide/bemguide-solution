@@ -294,6 +294,7 @@ export function logout(): void {
     try {
       window.localStorage.removeItem("poruch.v2.feed.cache.v1");
       window.localStorage.removeItem("poruch.v2.me.cache.v1");
+      window.localStorage.removeItem("poruch.v2.me.cache.v2");
     } catch {
       /* ignore */
     }

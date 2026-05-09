@@ -1,14 +1,12 @@
-// Profile tab. Stale-while-revalidate against /me — read the
-// localStorage cache on mount, fire the fetch in parallel with
-// /me/upcoming, swap when fresh data lands. Avoids the wall of
-// skeleton on every "Я" tap.
+// Profile tab. Stale-while-revalidate against /me + /me/upcoming +
+// the TG photo, all merged into a single localStorage entry. Tab
+// switches paint the full profile instantly from cache (avatar +
+// city + privacy + upcoming list); the network refetch happens in
+// the background and swaps when fresh data lands.
 //
 // Avatar source priority:
 //   1. Telegram `initDataUnsafe.user.photo_url` (Bot API 7.0+)
 //   2. First letter of display_name in a teal circle (fallback)
-//
-// No top header — the bottom tab bar already says we're on the
-// profile.
 
 "use client";
 
@@ -25,7 +23,7 @@ import {
   type UpcomingItem,
   type V2User,
 } from "@/lib/api";
-import { getTgUserWithWait } from "@/lib/telegram/client";
+import { getTgUser, getTgUserWithWait } from "@/lib/telegram/client";
 import { formatEventDateTime } from "@/lib/format";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
@@ -44,18 +42,28 @@ export function MeClient() {
 
     let cancelled = false;
 
-    // Hydrate-from-cache (post-mount → SSR safe). If anything is
-    // there, the page paints with real content while the network
-    // refetch runs in the background.
+    // Hydrate everything we can synchronously, in this exact order
+    // so the very first paint is fully populated:
+    //   1. Cache → me, upcoming, photoUrl (the previous fetch's data)
+    //   2. SDK photo_url if it's already loaded (covers the fresh-
+    //      login case where there's no cache yet but TgInit has run).
     const cached = readMeCache();
-    if (cached) setMe(cached);
+    if (cached) {
+      setMe(cached.user);
+      if (cached.upcoming) setUpcoming(cached.upcoming);
+      if (cached.photo_url) setPhotoUrl(cached.photo_url);
+    }
+    const tgPhoto = getTgUser().photoUrl;
+    if (tgPhoto) setPhotoUrl(tgPhoto);
 
-    // Pull TG photo_url separately so even unauth'd / first-time
-    // users get an avatar before /me resolves.
-    void (async () => {
-      const tgUser = await getTgUserWithWait();
-      if (!cancelled && tgUser.photoUrl) setPhotoUrl(tgUser.photoUrl);
-    })();
+    // Async fallback for the photo: if the SDK wasn't ready
+    // synchronously, poll (up to 3s) and update once it lands.
+    if (!tgPhoto) {
+      void (async () => {
+        const u = await getTgUserWithWait();
+        if (!cancelled && u.photoUrl) setPhotoUrl(u.photoUrl);
+      })();
+    }
 
     async function load() {
       try {
@@ -65,9 +73,13 @@ export function MeClient() {
         ]);
         if (cancelled) return;
         setMe(meRes);
-        writeMeCache(meRes);
         setUpcoming(upRes.items);
         setError(null);
+        writeMeCache({
+          user: meRes,
+          upcoming: upRes.items,
+          photoUrl: tgPhoto ?? cached?.photo_url ?? null,
+        });
       } catch (e) {
         if (cancelled) return;
         logApiError("me", e);
@@ -158,7 +170,6 @@ export function MeClient() {
           </ul>
         )}
       </section>
-
     </main>
   );
 }
