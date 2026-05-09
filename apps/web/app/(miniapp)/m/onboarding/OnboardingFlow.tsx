@@ -27,7 +27,6 @@ import { DEMO_CITIES } from "@poruch/shared";
 import { OnboardingCard } from "@/components/poruch/OnboardingCard";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import {
   getStartParam,
   getTgUser,
@@ -594,7 +593,12 @@ function NameStep({
   showPublicly: boolean;
   onShowPublicly: (v: boolean) => void;
 }) {
-  const empty = displayName.trim().length === 0;
+  const trimmed = displayName.trim();
+  const hasName = trimmed.length > 0;
+  // Public visibility requires *both* a name *and* the toggle on. Toggling
+  // anonymous flips the bit; toggling visible needs a non-empty name.
+  const mode: "anon" | "public" = hasName && showPublicly ? "public" : "anon";
+
   return (
     <div className="space-y-5">
       <div className="space-y-2">
@@ -607,34 +611,73 @@ function NameStep({
           maxLength={120}
           autoComplete="given-name"
         />
-        <p className="text-muted-foreground text-xs">
-          Залиш порожнім, щоб бути анонімним.
-        </p>
       </div>
 
-      <div
-        className={cn(
-          "border-border flex items-start gap-3 rounded-xl border p-3 transition",
-          empty && "opacity-50",
-        )}
-      >
-        <Switch
-          id="show-name"
-          checked={showPublicly}
-          onCheckedChange={onShowPublicly}
-          disabled={empty}
-        />
-        <div className="space-y-0.5">
-          <Label htmlFor="show-name" className="text-sm font-medium">
-            Показувати моє ім'я в подіях
-          </Label>
-          <p className="text-muted-foreground text-xs">
-            Інші ветерани побачать «{displayName.trim() || "ім'я"}» серед тих, хто йде. Без
-            цього — тільки кількість.
-          </p>
+      <div className="space-y-2">
+        <Label>Як показувати в подіях</Label>
+        <div className="grid grid-cols-2 gap-2">
+          <ModeChip
+            active={mode === "anon"}
+            onClick={() => onShowPublicly(false)}
+            title="Анонімно"
+            subtitle="Видно тільки кількість"
+          />
+          <ModeChip
+            active={mode === "public"}
+            disabled={!hasName}
+            onClick={() => onShowPublicly(true)}
+            title={`Показувати «${trimmed || "ім'я"}»`}
+            subtitle={
+              hasName ? "Імʼя серед тих, хто йде" : "Спершу введи ім'я вище"
+            }
+          />
         </div>
+        <p className="text-muted-foreground text-xs">
+          Можна змінити окремо для кожної події.
+        </p>
       </div>
     </div>
+  );
+}
+
+function ModeChip({
+  active,
+  disabled,
+  onClick,
+  title,
+  subtitle,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      style={{ touchAction: "manipulation" }}
+      className={cn(
+        "flex h-auto min-h-[72px] flex-col items-start justify-center gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition",
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border bg-card text-foreground hover:border-primary/40",
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    >
+      <span className="text-sm font-semibold leading-tight">{title}</span>
+      <span
+        className={cn(
+          "text-xs leading-tight",
+          active ? "text-primary-foreground/85" : "text-muted-foreground",
+        )}
+      >
+        {subtitle}
+      </span>
+    </button>
   );
 }
 
