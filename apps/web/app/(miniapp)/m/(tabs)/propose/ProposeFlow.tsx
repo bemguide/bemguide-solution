@@ -11,6 +11,13 @@
 // the shared `SectionHeader`; inputs and chips use the onboarding's
 // card-shaped styling so the surface reads as one consistent app.
 //
+// Location: lat/lng comes from a required pin on an inline Leaflet map
+// bounded to the selected city. Pin can be set by tapping the map,
+// dragging the existing pin, or tapping "моя локація" (which uses
+// Telegram's LocationManager when available, browser geolocation
+// otherwise). The map component is dynamically imported with
+// `ssr: false` so Leaflet ships only to the proposer surface.
+//
 // Accessibility:
 //   - inputMode + autoComplete hints surface the right mobile keyboard.
 //   - validate() returns {field, message}; on error we focus + scroll
@@ -24,6 +31,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { MapPin, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -45,23 +53,34 @@ import {
   type InterestCategory,
 } from "@poruch/shared";
 import { createOpportunity, describeError, getCurrentUser, logApiError } from "@/lib/api";
+import {
+  tgGetLocation,
+  tgLocationDenied,
+  tgOpenLocationSettings,
+} from "@/lib/telegram/client";
+import { isWithinCityBounds } from "@/lib/cities";
 
-const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
-  Київ: { lat: 50.4501, lng: 30.5234 },
-  Львів: { lat: 49.8397, lng: 24.0297 },
-  Дніпро: { lat: 48.4647, lng: 35.0462 },
-  Харків: { lat: 49.9935, lng: 36.2304 },
-  Одеса: { lat: 46.4825, lng: 30.7233 },
-  Полтава: { lat: 49.5883, lng: 34.5514 },
-  Вінниця: { lat: 49.2331, lng: 28.4682 },
-  Луцьк: { lat: 50.7472, lng: 25.3254 },
-  Рівне: { lat: 50.6199, lng: 26.2516 },
-};
+// Leaflet bundles ~42KB gz of JS + 13KB of CSS — split it off the
+// onboarding/feed/me surfaces so only proposers pay for it.
+const MapPicker = dynamic(
+  () => import("@/components/poruch/MapPicker").then((m) => m.MapPicker),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="bg-muted h-56 w-full animate-pulse rounded-xl"
+        aria-hidden
+      />
+    ),
+  },
+);
 
 /** Demo restriction: only Дніпро is wired end-to-end against the seed. */
 const ENABLED_CITY = "Дніпро";
 
 const DESCRIPTION_MAX = 2000;
+
+type Pin = { lat: number; lng: number };
 
 type FormState = {
   title: string;
@@ -76,9 +95,17 @@ type FormState = {
   identity: IdentityPref;
   interests: InterestCategory[];
   accessibility: AccessibilityFlag[];
+  pin: Pin | null;
 };
 
 type FieldError = { field: keyof FormState | null; message: string };
+
+type LocateError =
+  | "denied:tg"
+  | "denied:browser"
+  | "out_of_city"
+  | "fail"
+  | null;
 
 const DEFAULT_DURATION = 90;
 const DEFAULT_CITY = ENABLED_CITY;
@@ -101,6 +128,8 @@ export function ProposeFlow() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<FieldError | null>(null);
   const [submitted, setSubmitted] = useState<{ id: string } | null>(null);
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState<LocateError>(null);
   const [form, setForm] = useState<FormState>({
     title: "",
     description: "",
@@ -114,6 +143,7 @@ export function ProposeFlow() {
     identity: "any",
     interests: [],
     accessibility: [],
+    pin: null,
   });
 
   // Hold refs to the inputs we may need to focus on validation error.
@@ -123,6 +153,7 @@ export function ProposeFlow() {
   const dateRef = useRef<HTMLInputElement>(null);
   const timeRef = useRef<HTMLInputElement>(null);
   const cityFieldsetRef = useRef<HTMLDivElement>(null);
+  const mapWrapperRef = useRef<HTMLDivElement>(null);
 
   // Pre-fill the city from the user's profile.
   useEffect(() => {
@@ -156,6 +187,11 @@ export function ProposeFlow() {
     if (!form.city.trim()) return { field: "city", message: "Обери місто." };
     if (!form.date) return { field: "date", message: "Вибери дату." };
     if (!form.time) return { field: "time", message: "Вибери час." };
+    if (!form.pin)
+      return {
+        field: "pin",
+        message: "Постав мітку на мапі — це обов'язково.",
+      };
     return null;
   }
 
@@ -169,7 +205,9 @@ export function ProposeFlow() {
             ? timeRef.current
             : field === "city"
               ? cityFieldsetRef.current
-              : null;
+              : field === "pin"
+                ? mapWrapperRef.current
+                : null;
     if (!el) return;
     // Smooth scroll into view, then focus on the next frame so the
     // keyboard doesn't fight the scroll animation on iOS.
@@ -193,14 +231,13 @@ export function ProposeFlow() {
     setBusy(true);
     setErr(null);
     try {
-      const coords = CITY_COORDS[form.city] ?? CITY_COORDS[DEFAULT_CITY]!;
       const opp = await createOpportunity({
         title: form.title.trim(),
         description: form.description.trim() || null,
         city: form.city.trim(),
         address: form.address.trim() || null,
-        location_lat: coords.lat,
-        location_lng: coords.lng,
+        location_lat: form.pin!.lat,
+        location_lng: form.pin!.lng,
         start_at: buildStartAt(),
         duration_min: form.durationMin || DEFAULT_DURATION,
         interests: form.interests as unknown as string[],
@@ -225,6 +262,51 @@ export function ProposeFlow() {
   // submit.
   function clearErrorIfMatches(field: keyof FormState) {
     if (err?.field === field) setErr(null);
+  }
+
+  function setPin(pin: Pin) {
+    setForm((f) => ({ ...f, pin }));
+    setLocateError(null);
+    clearErrorIfMatches("pin");
+  }
+
+  async function detectLocation() {
+    if (locating) return;
+    setLocating(true);
+    setLocateError(null);
+    try {
+      // Try Telegram's LocationManager first (Bot API 8.0+) — falls
+      // through to browser geolocation when not available or denied.
+      const tgLoc = await tgGetLocation();
+      if (tgLoc) {
+        if (!isWithinCityBounds(form.city, tgLoc)) {
+          setLocateError("out_of_city");
+          return;
+        }
+        setPin(tgLoc);
+        return;
+      }
+      if (tgLocationDenied()) {
+        setLocateError("denied:tg");
+        return;
+      }
+      const browser = await browserGeolocate();
+      if (browser === "denied") {
+        setLocateError("denied:browser");
+        return;
+      }
+      if (browser === "fail") {
+        setLocateError("fail");
+        return;
+      }
+      if (!isWithinCityBounds(form.city, browser)) {
+        setLocateError("out_of_city");
+        return;
+      }
+      setPin(browser);
+    } finally {
+      setLocating(false);
+    }
   }
 
   if (submitted) {
@@ -276,6 +358,7 @@ export function ProposeFlow() {
   const cityInvalid = err?.field === "city";
   const dateInvalid = err?.field === "date";
   const timeInvalid = err?.field === "time";
+  const pinInvalid = err?.field === "pin";
 
   return (
     <main className="flex flex-1 flex-col">
@@ -347,8 +430,11 @@ export function ProposeFlow() {
               value={form.city}
               onValueChange={(v) => {
                 if (!v || v !== ENABLED_CITY) return;
-                setForm((f) => ({ ...f, city: v }));
+                setForm((f) =>
+                  f.city === v ? f : { ...f, city: v, pin: null },
+                );
                 clearErrorIfMatches("city");
+                setLocateError(null);
               }}
               className="flex flex-wrap"
               aria-label="Місто"
@@ -382,6 +468,27 @@ export function ProposeFlow() {
               Зараз приймаємо події тільки в Дніпрі.
             </p>
           </div>
+
+          <div ref={mapWrapperRef} tabIndex={-1} className="space-y-1 outline-none">
+            <Label>Місце на мапі</Label>
+            <MapPicker
+              city={form.city}
+              pin={form.pin}
+              onChange={setPin}
+              onLocate={() => void detectLocation()}
+              locating={locating}
+              invalid={pinInvalid}
+            />
+            {locateError ? (
+              <LocateErrorLine error={locateError} onOpenSettings={tgOpenLocationSettings} />
+            ) : null}
+            {pinInvalid ? (
+              <p className="text-destructive text-xs" role="alert">
+                {err?.message}
+              </p>
+            ) : null}
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="address">Адреса (необов'язково)</Label>
             <Input
@@ -470,7 +577,10 @@ export function ProposeFlow() {
 
         <Section title="Деталі">
           <div className="space-y-2">
-            <Label htmlFor="price">Ціна, ₴ <span className="text-muted-foreground font-normal">(0 = безкоштовно)</span></Label>
+            <Label htmlFor="price">
+              Ціна, ₴{" "}
+              <span className="text-muted-foreground font-normal">(0 = безкоштовно)</span>
+            </Label>
             <Input
               id="price"
               type="number"
@@ -619,4 +729,60 @@ function Section({
       <div className="space-y-3">{children}</div>
     </section>
   );
+}
+
+function LocateErrorLine({
+  error,
+  onOpenSettings,
+}: {
+  error: NonNullable<LocateError>;
+  onOpenSettings: () => void;
+}) {
+  if (error === "denied:tg") {
+    return (
+      <p className="text-destructive space-x-1 text-xs" role="alert">
+        <span>Telegram заблокував доступ до геолокації.</span>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="text-primary inline underline-offset-2 hover:underline"
+        >
+          Відкрити налаштування
+        </button>
+      </p>
+    );
+  }
+  if (error === "denied:browser") {
+    return (
+      <p className="text-destructive text-xs" role="alert">
+        Браузер заблокував геолокацію. Постав мітку вручну.
+      </p>
+    );
+  }
+  if (error === "out_of_city") {
+    return (
+      <p className="text-destructive text-xs" role="alert">
+        Твоя локація поза межами міста — постав мітку вручну.
+      </p>
+    );
+  }
+  return (
+    <p className="text-destructive text-xs" role="alert">
+      Не вдалось визначити локацію. Постав мітку вручну.
+    </p>
+  );
+}
+
+function browserGeolocate(): Promise<Pin | "denied" | "fail"> {
+  return new Promise((resolve) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      resolve("fail");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (e) => resolve(e.code === e.PERMISSION_DENIED ? "denied" : "fail"),
+      { timeout: 6000, maximumAge: 60_000 },
+    );
+  });
 }

@@ -237,6 +237,7 @@ export function ClientEventPage({ id }: { id: string }) {
         eventStartAt={startDisplay}
         startedAlready={startedAlready(event.start_at)}
         organizerContact={event.organizer_contact}
+        city={event.city}
         attending={attending}
         onAttendingChange={(next) => {
           setState((s) => (s.kind === "ready" ? { ...s, attending: next } : s));

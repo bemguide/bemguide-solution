@@ -14,7 +14,7 @@
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Bell, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
@@ -25,7 +25,6 @@ import { cn } from "@/lib/utils";
 import {
   ApiError,
   describeError,
-  getRoom,
   logApiError,
   rsvp,
   setShowNamePublicly,
@@ -33,18 +32,19 @@ import {
 } from "@/lib/api";
 import { buildEventShareUrl } from "@/lib/share";
 import { extractFirstUrl } from "@/lib/url";
+import { QrSheet } from "@/components/poruch/QrSheet";
+import { formatEventDateTime } from "@/lib/format";
 import type { Attending } from "./ClientEventPage";
-
-const ROOM_POLL_INTERVAL_MS = 4000;
-const ROOM_POLL_MAX_ATTEMPTS = 30; // ≈2 minutes
 
 export function EventActions({
   eventId,
   eventTitle,
+  eventStartAt,
   startedAlready,
   organizerContact,
   attending,
   onAttendingChange,
+  city,
 }: {
   eventId: string;
   eventTitle: string;
@@ -52,6 +52,7 @@ export function EventActions({
   eventStartAt: string;
   startedAlready: boolean;
   organizerContact: string | null;
+  city: string | null;
   attending: Attending;
   onAttendingChange: (next: Attending) => void;
 }) {
@@ -67,8 +68,8 @@ export function EventActions({
       <AttendingBar
         eventId={eventId}
         eventTitle={eventTitle}
-        room={attending.room}
-        onRoomLanded={(room) => onAttendingChange({ kind: "yes", room })}
+        eventStartAt={eventStartAt}
+        city={city}
         onDeclined={() => onAttendingChange({ kind: "declined" })}
       />
     );
@@ -94,53 +95,26 @@ export function EventActions({
 }
 
 // ----------------------------------------------------------------
-// "I'm going" — chat link + share + decline + privacy
+// "I'm going" — QR check-in + share + decline + privacy
 // ----------------------------------------------------------------
 
 function AttendingBar({
   eventId,
   eventTitle,
-  room,
-  onRoomLanded,
+  eventStartAt,
+  city,
   onDeclined,
 }: {
   eventId: string;
   eventTitle: string;
-  room: V2EventRoom | null;
-  onRoomLanded: (room: V2EventRoom) => void;
+  eventStartAt: string;
+  city: string | null;
   onDeclined: () => void;
 }) {
   const [showName, setShowName] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollRef = useRef<{ cancel: () => void } | null>(null);
-
-  useEffect(() => {
-    if (room?.chat_provider) return;
-    pollRef.current?.cancel();
-    let cancelled = false;
-    let attempts = 0;
-    const tick = async () => {
-      if (cancelled) return;
-      attempts++;
-      try {
-        const fresh = await getRoom(eventId);
-        if (cancelled) return;
-        if (fresh && fresh.chat_provider) {
-          onRoomLanded(fresh);
-          return;
-        }
-      } catch {
-        /* try again until budget runs out */
-      }
-      if (attempts < ROOM_POLL_MAX_ATTEMPTS) {
-        window.setTimeout(tick, ROOM_POLL_INTERVAL_MS);
-      }
-    };
-    pollRef.current = { cancel: () => (cancelled = true) };
-    window.setTimeout(tick, ROOM_POLL_INTERVAL_MS);
-    return () => pollRef.current?.cancel();
-  }, [eventId, room?.chat_provider, onRoomLanded]);
+  const [qrOpen, setQrOpen] = useState(false);
 
   async function togglePrivacy(next: boolean) {
     setShowName(next);
@@ -185,65 +159,71 @@ function AttendingBar({
     }
   }
 
+  const subtitle = [eventStartAt ? formatEventDateTime(eventStartAt) : null, city]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
-      <div className="space-y-2">
-        {room?.chat_invite_url ? (
-          <Button asChild size="lg" className="h-12 w-full text-base font-semibold">
-            <a href={room.chat_invite_url} target="_blank" rel="noopener noreferrer">
-              Чат події
-            </a>
-          </Button>
-        ) : (
+    <>
+      <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
+        <div className="space-y-2">
           <Button
             type="button"
             size="lg"
             className="h-12 w-full text-base font-semibold"
-            disabled
+            onClick={() => setQrOpen(true)}
           >
-            Чат готується…
+            Показати QR
           </Button>
-        )}
 
-        <div className="grid grid-cols-2 gap-2">
-          <Button
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void onShareUrl()}
+            >
+              <Share2 className="mr-1.5 h-4 w-4" aria-hidden />
+              Поділитися
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void decline()}
+              disabled={busy}
+            >
+              Не зможу
+            </Button>
+          </div>
+
+          <button
             type="button"
-            variant="outline"
-            className="h-11"
-            onClick={() => void onShareUrl()}
+            onClick={() => void togglePrivacy(!showName)}
+            className={cn(
+              "block w-full text-center text-xs underline-offset-2 hover:underline",
+              showName ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            )}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={showName}
           >
-            <Share2 className="mr-1.5 h-4 w-4" aria-hidden />
-            Поділитися
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            className="h-11"
-            onClick={() => void decline()}
-            disabled={busy}
-          >
-            Не зможу
-          </Button>
+            {showName
+              ? "Показую ім'я · натисни щоб приховати"
+              : "Анонімно · натисни щоб показати ім'я"}
+          </button>
+
+          {error ? <p className="text-destructive text-xs">{error}</p> : null}
         </div>
-
-        <button
-          type="button"
-          onClick={() => void togglePrivacy(!showName)}
-          className={cn(
-            "block w-full text-center text-xs underline-offset-2 hover:underline",
-            showName ? "text-primary" : "text-muted-foreground hover:text-foreground",
-          )}
-          style={{ touchAction: "manipulation" }}
-          aria-pressed={showName}
-        >
-          {showName
-            ? "Показую ім'я · натисни щоб приховати"
-            : "Анонімно · натисни щоб показати ім'я"}
-        </button>
-
-        {error ? <p className="text-destructive text-xs">{error}</p> : null}
       </div>
-    </div>
+
+      <QrSheet
+        open={qrOpen}
+        onOpenChange={setQrOpen}
+        eventId={eventId}
+        eventTitle={eventTitle}
+        startedAlreadyLine={subtitle}
+      />
+    </>
   );
 }
 

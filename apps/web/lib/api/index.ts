@@ -17,6 +17,7 @@ export * from "./auth";
 export * from "./feed";
 export * from "./feed-cache";
 export * from "./me-cache";
+export * from "./check-in";
 export * from "./users";
 export * from "./invitations";
 export * from "./opportunities";
