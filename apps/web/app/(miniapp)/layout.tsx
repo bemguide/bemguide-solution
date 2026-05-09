@@ -12,7 +12,12 @@ export const metadata: Metadata = {
 export default function MiniappLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
+      {/*
+        afterInteractive is more reliable in Next 16 + Turbopack than
+        beforeInteractive for third-party SDKs. TgInit polls for the SDK
+        until it lands, so the timing relative to hydration doesn't matter.
+      */}
+      <Script src="https://telegram.org/js/telegram-web-app.js" strategy="afterInteractive" />
       <TgInit />
       {/*
         Layout is exactly one TMA viewport tall — fall back to 100dvh outside Telegram.
