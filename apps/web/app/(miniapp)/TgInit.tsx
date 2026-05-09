@@ -1,25 +1,24 @@
-// Boots the Telegram WebApp SDK once on mount and tries to take the full
-// available area on every host that supports it.
+// Boots the Telegram WebApp SDK once on mount and tries every modern API
+// the latest spec offers. We pin the script to a cache-buster query string
+// so older cached copies are not served.
 //
-// CRITICAL: every Mini App method has a minimum Bot API version. Calling a
-// method on an older client logs a warning ("Method X is not supported in
-// version Y") to the console. We feature-gate every optional call with
-// `isVersionAtLeast()` so older clients (e.g. Telegram Desktop reporting
-// 6.0) silently skip what they can't do.
+// What we do, in order, on every host:
+//   1. ready()                — Bot API 6.0+
+//   2. expand()                — Bot API 6.0+
+//   3. requestFullscreen()    — Bot API 8.0+ (no-op + console warning on older hosts)
+//   4. lockOrientation()       — Bot API 8.0+
+//   5. disableVerticalSwipes() — Bot API 7.8+
+//   6. setHeaderColor()        — Bot API 6.1+
+//   7. setBackgroundColor()    — Bot API 6.1+
 //
-// Method → minimum version (per https://core.telegram.org/bots/webapps):
-//   ready, expand, close, MainButton, BackButton, onEvent           — 6.0
-//   setHeaderColor, setBackgroundColor                              — 6.1
-//   showAlert, showConfirm, HapticFeedback                          — 6.2
-//   showPopup, scan QR, clipboard                                   — 6.4
-//   disableVerticalSwipes, enableVerticalSwipes                     — 7.8
-//   requestFullscreen, exitFullscreen, isFullscreen, lockOrientation— 8.0
+// Old hosts (e.g. Telegram Desktop reporting 6.0) emit a one-line
+// "Method X is not supported in version Y" warning per call. They are
+// console messages from Telegram's SDK, not application errors — the
+// app keeps running. Update Telegram to gain real fullscreen + the rest.
 //
-// Why fullscreen reads weirdly:
-//   requestFullscreen() reports failure async via the `fullscreenFailed`
-//   event (NOT a thrown exception). Some desktop clients also need a user
-//   gesture before they accept the request; we install a one-shot
-//   pointerdown retry as a fallback.
+// Async fullscreen feedback comes via `fullscreenChanged` / `fullscreenFailed`
+// events, NOT exceptions. Some desktop clients also need a user gesture, so
+// we retry once on the first pointerdown.
 
 "use client";
 
@@ -34,18 +33,20 @@ type WebAppLike = {
   isExpanded?: boolean;
   requestFullscreen?: () => void;
   exitFullscreen?: () => void;
+  lockOrientation?: () => void;
   disableVerticalSwipes?: () => void;
   enableClosingConfirmation?: () => void;
   setHeaderColor?: (c: string) => void;
   setBackgroundColor?: (c: string) => void;
   onEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
-  offEvent?: (event: string, cb: (data?: FullscreenFailedData) => void) => void;
   isVersionAtLeast?: (version: string) => boolean;
   platform?: string;
   version?: string;
 };
 
-const SDK_URL = "https://telegram.org/js/telegram-web-app.js";
+// Pin to the latest Telegram-published cache-buster. Bumping the suffix
+// forces clients to refetch when Telegram releases a new SDK build.
+const SDK_URL = "https://telegram.org/js/telegram-web-app.js?56";
 
 function getWebApp(): WebAppLike | null {
   if (typeof window === "undefined") return null;
@@ -91,9 +92,13 @@ function loadSDK(): Promise<WebAppLike | null> {
   });
 }
 
-/** True if `wa.version` >= `min` (e.g. "8.0"). Conservative: false if SDK didn't expose isVersionAtLeast. */
-function supports(wa: WebAppLike, min: string): boolean {
-  return Boolean(wa.isVersionAtLeast && wa.isVersionAtLeast(min));
+function callQuiet<T>(label: string, fn: () => T): T | undefined {
+  try {
+    return fn();
+  } catch (e) {
+    console.warn(`[TgInit] ${label} threw:`, e);
+    return undefined;
+  }
 }
 
 export function TgInit() {
@@ -110,76 +115,49 @@ export function TgInit() {
       }
 
       if (process.env.NODE_ENV !== "production") {
-        console.debug(`[TgInit] platform=${wa.platform} version=${wa.version}`);
+        console.debug(`[TgInit] platform=${wa.platform} botApi=${wa.version}`);
       }
 
-      // 6.0 baseline — always available.
-      try {
-        wa.ready();
-        wa.expand();
-      } catch (e) {
-        console.warn("[TgInit] ready/expand threw:", e);
-      }
+      // Baseline.
+      callQuiet("ready", () => wa.ready());
+      callQuiet("expand", () => wa.expand());
 
-      // 6.1+: theme colors.
-      if (supports(wa, "6.1")) {
-        try {
-          wa.setHeaderColor?.("#FBF7F0");
-          wa.setBackgroundColor?.("#FBF7F0");
-        } catch (e) {
-          console.warn("[TgInit] setHeader/BackgroundColor threw:", e);
+      // Theme — 6.1+. Optional-chaining means missing methods are no-ops.
+      callQuiet("setHeaderColor", () => wa.setHeaderColor?.("#FBF7F0"));
+      callQuiet("setBackgroundColor", () => wa.setBackgroundColor?.("#FBF7F0"));
+
+      // 7.8+: stop "swipe down to close" mid-scroll.
+      callQuiet("disableVerticalSwipes", () => wa.disableVerticalSwipes?.());
+
+      // 8.0+: fullscreen + orientation lock. We attempt unconditionally; old
+      // clients emit a one-line warning per call but otherwise proceed fine.
+      wa.onEvent?.("fullscreenChanged", () => {
+        if (process.env.NODE_ENV !== "production") {
+          console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
         }
-      }
+      });
+      wa.onEvent?.("fullscreenFailed", (data) => {
+        // UNSUPPORTED is expected on Bot API <8.0.
+        console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
+      });
 
-      // 7.8+: stop "swipe down to close" from firing while we scroll content.
-      if (supports(wa, "7.8")) {
-        try {
-          wa.disableVerticalSwipes?.();
-        } catch (e) {
-          console.warn("[TgInit] disableVerticalSwipes threw:", e);
-        }
-      }
+      const tryFs = (source: string) => {
+        if (wa.isFullscreen) return;
+        callQuiet(`requestFullscreen(${source})`, () => wa.requestFullscreen?.());
+        callQuiet(`lockOrientation(${source})`, () => wa.lockOrientation?.());
+      };
 
-      // 8.0+: true fullscreen. Only attempt if the host supports it; older
-      // clients (e.g. the user's TDesktop reporting Bot API 6.0) keep the
-      // default panel size — the only way to grow that is to update Telegram.
-      if (supports(wa, "8.0")) {
-        wa.onEvent?.("fullscreenChanged", () => {
-          if (process.env.NODE_ENV !== "production") {
-            console.debug("[TgInit] fullscreenChanged → isFullscreen=", wa.isFullscreen);
-          }
-        });
-        wa.onEvent?.("fullscreenFailed", (data) => {
-          console.warn("[TgInit] fullscreenFailed:", data?.error ?? "unknown");
-        });
+      tryFs("init");
 
-        const tryFs = (source: string) => {
-          if (wa.isFullscreen) return;
-          try {
-            wa.requestFullscreen?.();
-            if (process.env.NODE_ENV !== "production") {
-              console.debug(`[TgInit] requestFullscreen called (${source})`);
-            }
-          } catch (e) {
-            console.warn(`[TgInit] requestFullscreen sync error (${source}):`, e);
-          }
-        };
-
-        tryFs("init");
-
-        // Some desktop clients require a user gesture; retry on first pointerdown.
-        pointerListener = () => {
-          if (!wa.isFullscreen) tryFs("first-gesture");
-        };
-        window.addEventListener("pointerdown", pointerListener, {
-          once: true,
-          capture: true,
-        });
-      } else if (process.env.NODE_ENV !== "production") {
-        console.debug(
-          `[TgInit] fullscreen unavailable — host reports Bot API ${wa.version}, requires 8.0+. Update Telegram to expand beyond the default panel.`,
-        );
-      }
+      // Some desktop clients reject fullscreen requests that aren't tied to
+      // a user gesture; retry on first pointerdown.
+      pointerListener = () => {
+        if (!wa.isFullscreen) tryFs("first-gesture");
+      };
+      window.addEventListener("pointerdown", pointerListener, {
+        once: true,
+        capture: true,
+      });
     });
 
     return () => {
