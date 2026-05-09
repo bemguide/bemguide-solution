@@ -32,6 +32,7 @@ import {
   type V2EventRoom,
 } from "@/lib/api";
 import { buildEventShareUrl } from "@/lib/share";
+import { extractFirstUrl } from "@/lib/url";
 import type { Attending } from "./ClientEventPage";
 
 const ROOM_POLL_INTERVAL_MS = 4000;
@@ -315,7 +316,10 @@ function buildOrganizerHref(raw: string | null): string | null {
   if (!raw) return null;
   const c = raw.trim();
   if (!c) return null;
-  if (c.startsWith("http://") || c.startsWith("https://")) return c;
+  // Extract any embedded URL first — handles the common
+  // "label · https://www.facebook.com/very/long" shape.
+  const embedded = extractFirstUrl(c);
+  if (embedded) return embedded;
   if (c.startsWith("@")) return `https://t.me/${c.slice(1)}`;
   if (/^t\.me\//i.test(c)) return `https://${c}`;
   if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c)) return `mailto:${c}`;

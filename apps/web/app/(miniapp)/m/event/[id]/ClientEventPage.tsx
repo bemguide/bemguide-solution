@@ -8,10 +8,12 @@ import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarClock, MapPin, Phone, Send } from "lucide-react";
+import { CalendarClock, MapPin } from "lucide-react";
 import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
+import { Autolink } from "@/components/poruch/Autolink";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
+import { extractFirstUrl, prettyUrlHost } from "@/lib/url";
 import {
   ApiError,
   describeError,
@@ -182,9 +184,10 @@ export function ClientEventPage({ id }: { id: string }) {
       {event.description ? (
         <section className="space-y-2 px-4 pb-4">
           <h2 className="text-foreground text-lg font-semibold">Що там буде</h2>
-          <div className="text-foreground space-y-3 whitespace-pre-line text-base">
-            {event.description}
-          </div>
+          <Autolink
+            text={event.description}
+            className="text-foreground block whitespace-pre-line break-words text-base"
+          />
         </section>
       ) : null}
 
@@ -219,14 +222,7 @@ export function ClientEventPage({ id }: { id: string }) {
       {event.organizer_contact ? (
         <section className="space-y-1 px-4 pb-4">
           <h2 className="text-foreground text-lg font-semibold">Організатор</h2>
-          <p className="text-foreground inline-flex items-center gap-2 text-base">
-            {event.organizer_contact.includes("@") ? (
-              <Send className="h-4 w-4" aria-hidden />
-            ) : (
-              <Phone className="h-4 w-4" aria-hidden />
-            )}
-            {event.organizer_contact}
-          </p>
+          <OrganizerLine raw={event.organizer_contact} />
         </section>
       ) : null}
 
@@ -249,6 +245,29 @@ function startedAlready(startAt: string | null): boolean {
   if (!startAt) return false;
   const t = Date.parse(startAt);
   return !Number.isNaN(t) && t < Date.now();
+}
+
+/**
+ * `organizer_contact` is free text on the backend — could be plain prose,
+ * a Telegram handle, a phone, an email, or "label · https://very/long/url".
+ * We extract the first URL when there is one and show only the host as a
+ * tappable link; otherwise fall back to autolinking the raw text.
+ */
+function OrganizerLine({ raw }: { raw: string }) {
+  const url = extractFirstUrl(raw);
+  if (url) {
+    return (
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary inline-flex items-center break-words text-base underline underline-offset-2 hover:no-underline"
+      >
+        {prettyUrlHost(url)}
+      </a>
+    );
+  }
+  return <Autolink text={raw} className="text-foreground block break-words text-base" />;
 }
 
 export type { Attending };
