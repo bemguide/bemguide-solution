@@ -22,6 +22,9 @@ export type TelegramWebApp = {
     };
     start_param?: string;
   };
+  version?: string;
+  platform?: string;
+  isVersionAtLeast?: (version: string) => boolean;
   ready: () => void;
   expand: () => void;
   close: () => void;
@@ -34,6 +37,33 @@ export type TelegramWebApp = {
     hide: () => void;
     onClick: (cb: () => void) => void;
   };
+  // LocationManager — Bot API 8.0+. Use this in preference to
+  // navigator.geolocation inside the Mini App: browser geolocation often
+  // returns "denied" because Telegram doesn't proxy the OS permission
+  // prompt, but LocationManager handles it natively.
+  LocationManager?: TelegramLocationManager;
+};
+
+export type TelegramLocationData = {
+  latitude: number;
+  longitude: number;
+  altitude?: number | null;
+  course?: number | null;
+  speed?: number | null;
+  horizontal_accuracy?: number | null;
+  vertical_accuracy?: number | null;
+  course_accuracy?: number | null;
+  speed_accuracy?: number | null;
+};
+
+export type TelegramLocationManager = {
+  isInited: boolean;
+  isLocationAvailable: boolean;
+  isAccessRequested: boolean;
+  isAccessGranted: boolean;
+  init: (callback?: () => void) => void;
+  getLocation: (callback: (data: TelegramLocationData | null) => void) => void;
+  openSettings: () => void;
 };
 
 export {};

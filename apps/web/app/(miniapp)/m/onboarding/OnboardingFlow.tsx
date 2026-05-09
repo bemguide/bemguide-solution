@@ -27,7 +27,13 @@ import {
 } from "@poruch/shared";
 import { OnboardingCard } from "@/components/poruch/OnboardingCard";
 import { Label } from "@/components/ui/label";
-import { getStartParam, getTgUser } from "@/lib/telegram/client";
+import {
+  getStartParam,
+  getTgUser,
+  tgGetLocation,
+  tgLocationDenied,
+  tgOpenLocationSettings,
+} from "@/lib/telegram/client";
 import { cn } from "@/lib/utils";
 import {
   ApiError,
@@ -167,40 +173,65 @@ export function OnboardingFlow() {
     }
   }
 
-  function detectLocation() {
+  function pickNearestCity(here: { lat: number; lng: number }): string {
+    const cities = Object.entries(CITY_COORDS);
+    let bestName = cities[0]?.[0] ?? "Київ";
+    let bestKm = Number.POSITIVE_INFINITY;
+    for (const [name, c] of cities) {
+      const km = haversineKm(here, c);
+      if (km < bestKm) {
+        bestKm = km;
+        bestName = name;
+      }
+    }
+    return bestName;
+  }
+
+  function browserGeolocate(): Promise<{ lat: number; lng: number } | "denied" | "fail"> {
+    return new Promise((resolve) => {
+      if (typeof navigator === "undefined" || !navigator.geolocation) {
+        resolve("fail");
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        (err) => resolve(err.code === err.PERMISSION_DENIED ? "denied" : "fail"),
+        { timeout: 6000, maximumAge: 60_000 },
+      );
+    });
+  }
+
+  async function detectLocation() {
     if (locating) return;
     setLocateError(null);
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setLocateError("Геолокація недоступна. Введи місто вручну.");
-      return;
-    }
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const here = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        const cities = Object.entries(CITY_COORDS);
-        let bestName = cities[0]?.[0] ?? "Київ";
-        let bestKm = Number.POSITIVE_INFINITY;
-        for (const [name, c] of cities) {
-          const km = haversineKm(here, c);
-          if (km < bestKm) {
-            bestKm = km;
-            bestName = name;
-          }
-        }
-        setState((s) => ({ ...s, city: bestName }));
-        setLocating(false);
-      },
-      (err) => {
-        setLocating(false);
-        setLocateError(
-          err.code === err.PERMISSION_DENIED
-            ? "Доступ до геолокації заборонено."
-            : "Не вдалось визначити. Введи вручну.",
-        );
-      },
-      { timeout: 6000, maximumAge: 60_000 },
-    );
+    try {
+      // Prefer Telegram's LocationManager (Bot API 8.0+). It surfaces a
+      // native OS permission prompt — browser geolocation inside a Mini
+      // App is silently blocked on most Telegram clients.
+      const tgLoc = await tgGetLocation();
+      if (tgLoc) {
+        setState((s) => ({ ...s, city: pickNearestCity(tgLoc) }));
+        return;
+      }
+      // If LocationManager said no, was it because access is denied?
+      if (tgLocationDenied()) {
+        setLocateError("denied:tg");
+        return;
+      }
+      // LocationManager unavailable (older Telegram client or running
+      // outside Telegram). Fall back to browser geolocation.
+      const browser = await browserGeolocate();
+      if (browser === "denied") {
+        setLocateError("denied:browser");
+      } else if (browser === "fail") {
+        setLocateError("fail");
+      } else {
+        setState((s) => ({ ...s, city: pickNearestCity(browser) }));
+      }
+    } finally {
+      setLocating(false);
+    }
   }
 
   return (
@@ -229,7 +260,8 @@ export function OnboardingFlow() {
           <CityStep
             value={state.city}
             onChange={(city) => setState({ ...state, city })}
-            onDetect={detectLocation}
+            onDetect={() => void detectLocation()}
+            onOpenSettings={tgOpenLocationSettings}
             locating={locating}
             locateError={locateError}
           />
@@ -303,12 +335,14 @@ function CityStep({
   value,
   onChange,
   onDetect,
+  onOpenSettings,
   locating,
   locateError,
 }: {
   value: string;
   onChange: (v: string) => void;
   onDetect: () => void;
+  onOpenSettings: () => void;
   locating: boolean;
   locateError: string | null;
 }) {
@@ -381,9 +415,47 @@ function CityStep({
         <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} aria-hidden />
         {locating ? "Шукаю…" : "Визначити автоматично"}
       </button>
-      {locateError ? <p className="text-destructive text-xs">{locateError}</p> : null}
+      <LocateError error={locateError} onOpenSettings={onOpenSettings} />
     </div>
   );
+}
+
+function LocateError({
+  error,
+  onOpenSettings,
+}: {
+  error: string | null;
+  onOpenSettings: () => void;
+}) {
+  if (!error) return null;
+  if (error === "denied:tg") {
+    return (
+      <div className="text-destructive space-y-1 text-xs">
+        <p>Telegram заблокував доступ до геолокації для цього додатка.</p>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="text-primary inline-flex items-center underline-offset-2 hover:underline"
+        >
+          Відкрити налаштування
+        </button>
+      </div>
+    );
+  }
+  if (error === "denied:browser") {
+    return (
+      <div className="text-destructive space-y-1 text-xs">
+        <p>Браузер заблокував геолокацію.</p>
+        <p className="text-muted-foreground">
+          Дозволь у налаштуваннях сайту або введи місто вручну.
+        </p>
+      </div>
+    );
+  }
+  if (error === "fail") {
+    return <p className="text-destructive text-xs">Не вдалось визначити. Введи вручну.</p>;
+  }
+  return <p className="text-destructive text-xs">{error}</p>;
 }
 
 // ----------------------------------------------------------------
