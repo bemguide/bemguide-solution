@@ -1,32 +1,33 @@
-// Three-step onboarding: city / interests / comfort. Each step PATCHes
-// /me with the partial answer; the recompute trigger rebuilds
-// event_matches under the hood so the next /feed call is already
-// personalised.
+// Six-step onboarding that captures all 12 v2 user fields:
 //
-// Deep-link contract: bot start params:
-//   - `evt_<uuid>`   → skip onboarding, jump straight to /m/event/<uuid>
-//   - `defer_<uuid>` → skip onboarding to /m/feed
-// We accept these but DON'T include them in the call to PATCH /me.
+//   Step 1 — Місто               → users.city
+//   Step 2 — Як звертатися         → users.display_name + users.show_name_publicly
+//   Step 3 — Інтереси             → users.interests
+//   Step 4 — Графік               → users.availability + users.schedule_constraints
+//   Step 5 — Що для комфорту       → users.company_preference
+//                                  + users.accessibility_flags
+//                                  + users.triggers_to_avoid
+//   Step 6 — Про тебе              → users.veteran_status + users.age_range
+//                                  + users.role_in_group + users.bio
+//
+// Each step PATCHes /me with its slice. The backend's
+// users_match_recompute trigger rebuilds event_matches under the hood,
+// so the next /feed fetch is already personalised.
+//
+// Deep-link bypass kept verbatim from the v1 lane:
+//   - `evt_<id>`   → skip onboarding to /m/event/<id>
+//   - `defer_<id>` → skip onboarding to /m/feed
 
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronDown, CircleCheck, LocateFixed, MapPin, X } from "lucide-react";
-import {
-  ACCESSIBILITY_FLAGS,
-  ACCESSIBILITY_LABELS_UK,
-  DEMO_CITIES,
-  IDENTITY_LABELS_UK,
-  IDENTITY_PREFS,
-  INTEREST_CATEGORIES,
-  INTEREST_LABELS_UK,
-  type AccessibilityFlag,
-  type IdentityPref,
-  type InterestCategory,
-} from "@poruch/shared";
+import { LocateFixed, MapPin, X } from "lucide-react";
+import { DEMO_CITIES } from "@poruch/shared";
 import { OnboardingCard } from "@/components/poruch/OnboardingCard";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   getStartParam,
   getTgUser,
@@ -35,17 +36,31 @@ import {
   tgOpenLocationSettings,
 } from "@/lib/telegram/client";
 import { cn } from "@/lib/utils";
-import { describeError, updateCurrentUser, type UserPatch } from "@/lib/api";
+import {
+  describeError,
+  updateCurrentUser,
+  type AccessibilityFlag,
+  type AgeRange,
+  type CompanyPreference,
+  type UserPatch,
+  type VeteranStatus,
+} from "@/lib/api";
+import {
+  ACCESSIBILITY_OPTIONS,
+  AGE_RANGE_OPTIONS,
+  AVAILABILITY_OPTIONS,
+  COMPANY_PREFERENCE_OPTIONS,
+  INTEREST_OPTIONS,
+  ROLE_IN_GROUP_OPTIONS,
+  TRIGGER_OPTIONS,
+  VETERAN_STATUS_OPTIONS,
+  type Option,
+} from "./options";
 
-type StepState = {
-  city: string;
-  interests: InterestCategory[];
-  identity: IdentityPref;
-  accessibility: AccessibilityFlag[];
-  comfort: string;
-};
+const TOTAL_STEPS = 6;
 
 const NEAREST_CITIES = [...DEMO_CITIES] as const;
+
 // Approximate centroids for "Визначити автоматично" → nearest demo city.
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   Київ: { lat: 50.4501, lng: 30.5234 },
@@ -70,44 +85,57 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
   return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-// Map our local IdentityPref enum to the backend's identity_pref enum
-// values. They line up 1:1 today, but keep the cast central so a future
-// schema split is easy to spot.
-function toBackendIdentity(p: IdentityPref): UserPatch["company_preference"] {
-  // company_preference is a separate enum; identity_pref isn't directly
-  // settable on /me. The closest analogue from our 3-step UI is
-  // "with whom is comfortable" → company_preference.
-  switch (p) {
-    case "women_only":
-      return "women_only";
-    case "any":
-      return "any";
-    default:
-      // mixed_with_women_emphasis / men_only / family_friendly all collapse
-      // to "mixed" on the user record (their target side lives on the
-      // opportunity).
-      return "mixed";
-  }
-}
+type FormState = {
+  // Step 1
+  city: string;
+  // Step 2
+  displayName: string;
+  showNamePublicly: boolean;
+  // Step 3
+  interests: string[];
+  // Step 4
+  availability: string[];
+  scheduleConstraints: string;
+  // Step 5
+  companyPreference: CompanyPreference;
+  accessibility: AccessibilityFlag[];
+  triggers: string[];
+  // Step 6
+  veteranStatus: VeteranStatus | null;
+  ageRange: AgeRange | null;
+  roleInGroup: string;
+  bio: string;
+};
+
+const initialState: FormState = {
+  city: "",
+  displayName: "",
+  showNamePublicly: false,
+  interests: [],
+  availability: [],
+  scheduleConstraints: "",
+  companyPreference: "any",
+  accessibility: [],
+  triggers: [],
+  veteranStatus: null,
+  ageRange: null,
+  roleInGroup: "",
+  bio: "",
+};
 
 export function OnboardingFlow() {
   const router = useRouter();
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [state, setState] = useState<StepState>({
-    city: "",
-    interests: [],
-    identity: "any",
-    accessibility: [],
-    comfort: "",
-  });
   const [bypassed, setBypassed] = useState(false);
-  const [comfortOpen, setComfortOpen] = useState(false);
+  const [state, setState] = useState<FormState>(initialState);
+
+  // Step 1 state — geolocation UI.
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
-  // Deep-link bypass: start_param=evt_<id> → skip onboarding to event page.
+  // Deep-link bypass.
   useEffect(() => {
     const param = getStartParam();
     if (param.startsWith("evt_")) {
@@ -120,33 +148,32 @@ export function OnboardingFlow() {
       router.replace("/m/feed");
       return;
     }
-    void getTgUser();
+    // Pre-fill display_name from Telegram first_name (user can edit on Step 2).
+    const tg = getTgUser();
+    if (tg.firstName) setState((s) => ({ ...s, displayName: tg.firstName ?? "" }));
   }, [router]);
 
   if (bypassed) return null;
 
   async function persist(patch: UserPatch): Promise<boolean> {
     try {
-      // apiFetch auto-exchanges initData on first call, self-heals a
-      // single 401, and backs off for 5s after a confirmed auth failure
-      // — so we don't need to manage tokens here.
       await updateCurrentUser(patch);
       return true;
     } catch (e) {
-      // Non-fatal: log + show the friendly mapping but let the user
-      // keep going. Onboarding is skip-able; we don't gate forward
-      // navigation behind a backend hiccup.
+      // Non-fatal: log + show but let the user keep going.
+      // Onboarding is skip-able; we don't gate forward navigation
+      // behind a backend hiccup.
       console.warn("[onboarding] patch failed:", e);
       setError(describeError(e, "onboarding"));
       return false;
     }
   }
 
-  async function persistAndAdvance(patch: UserPatch, next: 1 | 2 | 3 | "done") {
+  async function advance(patch: UserPatch | null, next: typeof step | "done") {
     setBusy(true);
     setError(null);
     try {
-      if (Object.keys(patch).length > 0) {
+      if (patch && Object.keys(patch).length > 0) {
         await persist(patch);
       }
       if (next === "done") {
@@ -159,62 +186,88 @@ export function OnboardingFlow() {
     }
   }
 
-  function pickNearestCity(here: { lat: number; lng: number }): string {
-    const cities = Object.entries(CITY_COORDS);
-    let bestName = cities[0]?.[0] ?? "Київ";
-    let bestKm = Number.POSITIVE_INFINITY;
-    for (const [name, c] of cities) {
-      const km = haversineKm(here, c);
-      if (km < bestKm) {
-        bestKm = km;
-        bestName = name;
-      }
-    }
-    return bestName;
+  // ----- Step handlers (each builds its own patch) -----
+
+  function commitStep1(skip = false) {
+    const patch: UserPatch = skip || !state.city.trim() ? {} : { city: state.city.trim() };
+    void advance(patch, 2);
   }
 
-  function browserGeolocate(): Promise<{ lat: number; lng: number } | "denied" | "fail"> {
-    return new Promise((resolve) => {
-      if (typeof navigator === "undefined" || !navigator.geolocation) {
-        resolve("fail");
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-        (err) => resolve(err.code === err.PERMISSION_DENIED ? "denied" : "fail"),
-        { timeout: 6000, maximumAge: 60_000 },
-      );
-    });
+  function commitStep2(skip = false) {
+    if (skip) return void advance({}, 3);
+    const name = state.displayName.trim();
+    void advance(
+      {
+        display_name: name || null,
+        show_name_publicly: name ? state.showNamePublicly : false,
+      },
+      3,
+    );
   }
+
+  function commitStep3(skip = false) {
+    void advance(skip ? {} : { interests: state.interests }, 4);
+  }
+
+  function commitStep4(skip = false) {
+    if (skip) return void advance({}, 5);
+    const constraints = state.scheduleConstraints.trim();
+    void advance(
+      {
+        availability: state.availability,
+        schedule_constraints: constraints || null,
+      },
+      5,
+    );
+  }
+
+  function commitStep5(skip = false) {
+    if (skip) return void advance({}, 6);
+    void advance(
+      {
+        company_preference: state.companyPreference,
+        accessibility_flags: state.accessibility,
+        triggers_to_avoid: state.triggers,
+      },
+      6,
+    );
+  }
+
+  function commitStep6(skip = false) {
+    if (skip) return void advance({}, "done");
+    const role = state.roleInGroup.trim();
+    const bio = state.bio.trim();
+    void advance(
+      {
+        veteran_status: state.veteranStatus,
+        age_range: state.ageRange,
+        role_in_group: role || null,
+        bio: bio || null,
+      },
+      "done",
+    );
+  }
+
+  // ----- Step 1 geolocation handlers -----
 
   async function detectLocation() {
     if (locating) return;
     setLocateError(null);
     setLocating(true);
     try {
-      // Prefer Telegram's LocationManager (Bot API 8.0+). It surfaces a
-      // native OS permission prompt — browser geolocation inside a Mini
-      // App is silently blocked on most Telegram clients.
       const tgLoc = await tgGetLocation();
       if (tgLoc) {
         setState((s) => ({ ...s, city: pickNearestCity(tgLoc) }));
         return;
       }
-      // If LocationManager said no, was it because access is denied?
       if (tgLocationDenied()) {
         setLocateError("denied:tg");
         return;
       }
-      // LocationManager unavailable (older Telegram client or running
-      // outside Telegram). Fall back to browser geolocation.
       const browser = await browserGeolocate();
-      if (browser === "denied") {
-        setLocateError("denied:browser");
-      } else if (browser === "fail") {
-        setLocateError("fail");
-      } else {
-        setState((s) => ({ ...s, city: pickNearestCity(browser) }));
-      }
+      if (browser === "denied") setLocateError("denied:browser");
+      else if (browser === "fail") setLocateError("fail");
+      else setState((s) => ({ ...s, city: pickNearestCity(browser) }));
     } finally {
       setLocating(false);
     }
@@ -231,17 +284,13 @@ export function OnboardingFlow() {
       {step === 1 ? (
         <OnboardingCard
           step={1}
-          total={3}
+          total={TOTAL_STEPS}
           title="Де ти зараз?"
           subtitle="Щоб показати тільки те, що поруч."
           primaryLabel="Далі"
           busy={busy}
-          onPrimary={() =>
-            state.city.trim()
-              ? persistAndAdvance({ city: state.city.trim() }, 2)
-              : persistAndAdvance({}, 2)
-          }
-          onSkip={() => persistAndAdvance({}, 2)}
+          onPrimary={() => commitStep1(false)}
+          onSkip={() => commitStep1(true)}
         >
           <CityStep
             value={state.city}
@@ -257,22 +306,19 @@ export function OnboardingFlow() {
       {step === 2 ? (
         <OnboardingCard
           step={2}
-          total={3}
-          title="Що тобі цікаво?"
-          subtitle="Можна вибрати кілька. Або жодного — все одно покажемо."
+          total={TOTAL_STEPS}
+          title="Як до тебе звертатися?"
+          subtitle="Можна анонімно — інші бачитимуть тільки кількість, не імена."
           primaryLabel="Далі"
           busy={busy}
-          onPrimary={() =>
-            persistAndAdvance(
-              { interests: state.interests as unknown as string[] },
-              3,
-            )
-          }
-          onSkip={() => persistAndAdvance({}, 3)}
+          onPrimary={() => commitStep2(false)}
+          onSkip={() => commitStep2(true)}
         >
-          <InterestStep
-            value={state.interests}
-            onChange={(interests) => setState({ ...state, interests })}
+          <NameStep
+            displayName={state.displayName}
+            onDisplayName={(displayName) => setState({ ...state, displayName })}
+            showPublicly={state.showNamePublicly}
+            onShowPublicly={(showNamePublicly) => setState({ ...state, showNamePublicly })}
           />
         </OnboardingCard>
       ) : null}
@@ -280,32 +326,89 @@ export function OnboardingFlow() {
       {step === 3 ? (
         <OnboardingCard
           step={3}
-          total={3}
-          title="Є щось важливе про комфорт?"
-          subtitle="Це не обов'язково — можна пропустити. Поможе підбирати релевантні події."
-          primaryLabel="Готово"
+          total={TOTAL_STEPS}
+          title="Що цікаво?"
+          subtitle="Кілька — або жодного. Все одно покажемо щось поруч."
+          primaryLabel="Далі"
           busy={busy}
-          onPrimary={() =>
-            persistAndAdvance(
-              {
-                company_preference: toBackendIdentity(state.identity),
-                accessibility_flags: state.accessibility,
-                bio: state.comfort.trim() || null,
-              },
-              "done",
-            )
-          }
-          onSkip={() => persistAndAdvance({}, "done")}
+          onPrimary={() => commitStep3(false)}
+          onSkip={() => commitStep3(true)}
+        >
+          <ChipMultiSelect
+            options={INTEREST_OPTIONS}
+            value={state.interests}
+            onChange={(interests) => setState({ ...state, interests })}
+            emptyHint="Нічого не вибрано — це нормально."
+          />
+        </OnboardingCard>
+      ) : null}
+
+      {step === 4 ? (
+        <OnboardingCard
+          step={4}
+          total={TOTAL_STEPS}
+          title="Коли тобі зручно?"
+          subtitle="Допоможе підбирати події під твій ритм."
+          primaryLabel="Далі"
+          busy={busy}
+          onPrimary={() => commitStep4(false)}
+          onSkip={() => commitStep4(true)}
+        >
+          <ScheduleStep
+            availability={state.availability}
+            onAvailability={(availability) => setState({ ...state, availability })}
+            constraints={state.scheduleConstraints}
+            onConstraints={(scheduleConstraints) =>
+              setState({ ...state, scheduleConstraints })
+            }
+          />
+        </OnboardingCard>
+      ) : null}
+
+      {step === 5 ? (
+        <OnboardingCard
+          step={5}
+          total={TOTAL_STEPS}
+          title="Що важливо для комфорту?"
+          subtitle="Усе опційно. Можна змінити будь-коли."
+          primaryLabel="Далі"
+          busy={busy}
+          onPrimary={() => commitStep5(false)}
+          onSkip={() => commitStep5(true)}
         >
           <ComfortStep
-            open={comfortOpen}
-            onToggle={() => setComfortOpen((v) => !v)}
-            identity={state.identity}
-            onIdentity={(v) => setState({ ...state, identity: v })}
+            companyPreference={state.companyPreference}
+            onCompanyPreference={(companyPreference) =>
+              setState({ ...state, companyPreference })
+            }
             accessibility={state.accessibility}
-            onAccessibility={(v) => setState({ ...state, accessibility: v })}
-            comfort={state.comfort}
-            onComfort={(v) => setState({ ...state, comfort: v })}
+            onAccessibility={(accessibility) => setState({ ...state, accessibility })}
+            triggers={state.triggers}
+            onTriggers={(triggers) => setState({ ...state, triggers })}
+          />
+        </OnboardingCard>
+      ) : null}
+
+      {step === 6 ? (
+        <OnboardingCard
+          step={6}
+          total={TOTAL_STEPS}
+          title="Про тебе"
+          subtitle="Це для матчингу — нікому не показуємо без твого дозволу."
+          primaryLabel="Готово"
+          busy={busy}
+          onPrimary={() => commitStep6(false)}
+          onSkip={() => commitStep6(true)}
+        >
+          <AboutStep
+            veteranStatus={state.veteranStatus}
+            onVeteranStatus={(veteranStatus) => setState({ ...state, veteranStatus })}
+            ageRange={state.ageRange}
+            onAgeRange={(ageRange) => setState({ ...state, ageRange })}
+            role={state.roleInGroup}
+            onRole={(roleInGroup) => setState({ ...state, roleInGroup })}
+            bio={state.bio}
+            onBio={(bio) => setState({ ...state, bio })}
           />
         </OnboardingCard>
       ) : null}
@@ -314,7 +417,39 @@ export function OnboardingFlow() {
 }
 
 // ----------------------------------------------------------------
-// Step 1 — city picker with input + nearest pills + geolocation
+// Helpers shared by step handlers
+// ----------------------------------------------------------------
+
+function pickNearestCity(here: { lat: number; lng: number }): string {
+  const cities = Object.entries(CITY_COORDS);
+  let bestName = cities[0]?.[0] ?? "Київ";
+  let bestKm = Number.POSITIVE_INFINITY;
+  for (const [name, c] of cities) {
+    const km = haversineKm(here, c);
+    if (km < bestKm) {
+      bestKm = km;
+      bestName = name;
+    }
+  }
+  return bestName;
+}
+
+function browserGeolocate(): Promise<{ lat: number; lng: number } | "denied" | "fail"> {
+  return new Promise((resolve) => {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      resolve("fail");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => resolve(err.code === err.PERMISSION_DENIED ? "denied" : "fail"),
+      { timeout: 6000, maximumAge: 60_000 },
+    );
+  });
+}
+
+// ----------------------------------------------------------------
+// Step 1 — City picker
 // ----------------------------------------------------------------
 
 function CityStep({
@@ -445,166 +580,306 @@ function LocateError({
 }
 
 // ----------------------------------------------------------------
-// Step 2 — interests as oval pills
+// Step 2 — Display name + privacy toggle
 // ----------------------------------------------------------------
 
-function InterestStep({
-  value,
-  onChange,
+function NameStep({
+  displayName,
+  onDisplayName,
+  showPublicly,
+  onShowPublicly,
 }: {
-  value: InterestCategory[];
-  onChange: (v: InterestCategory[]) => void;
+  displayName: string;
+  onDisplayName: (v: string) => void;
+  showPublicly: boolean;
+  onShowPublicly: (v: boolean) => void;
 }) {
-  const set = useMemo(() => new Set(value), [value]);
+  const empty = displayName.trim().length === 0;
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap gap-2.5">
-        {INTEREST_CATEGORIES.map((c) => {
-          const active = set.has(c);
-          return (
-            <button
-              key={c}
-              type="button"
-              onClick={() => {
-                const next = new Set(set);
-                if (active) next.delete(c);
-                else next.add(c);
-                onChange([...next]);
-              }}
-              className={cn(
-                "inline-flex h-11 items-center rounded-full border-2 px-5 text-sm font-medium transition",
-                active
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-primary/60 bg-card text-primary hover:border-primary",
-              )}
-              style={{ touchAction: "manipulation" }}
-              aria-pressed={active}
-            >
-              {INTEREST_LABELS_UK[c]}
-            </button>
-          );
-        })}
+    <div className="space-y-5">
+      <div className="space-y-2">
+        <Label htmlFor="dn">Ім'я</Label>
+        <Input
+          id="dn"
+          value={displayName}
+          onChange={(e) => onDisplayName(e.target.value)}
+          placeholder="наприклад, Дмитро"
+          maxLength={120}
+          autoComplete="given-name"
+        />
+        <p className="text-muted-foreground text-xs">
+          Залиш порожнім, щоб бути анонімним.
+        </p>
       </div>
-      {value.length === 0 ? (
-        <p className="text-muted-foreground text-xs">Нічого не вибрано — це нормально.</p>
-      ) : null}
+
+      <div
+        className={cn(
+          "border-border flex items-start gap-3 rounded-xl border p-3 transition",
+          empty && "opacity-50",
+        )}
+      >
+        <Switch
+          id="show-name"
+          checked={showPublicly}
+          onCheckedChange={onShowPublicly}
+          disabled={empty}
+        />
+        <div className="space-y-0.5">
+          <Label htmlFor="show-name" className="text-sm font-medium">
+            Показувати моє ім'я в подіях
+          </Label>
+          <p className="text-muted-foreground text-xs">
+            Інші ветерани побачать «{displayName.trim() || "ім'я"}» серед тих, хто йде. Без
+            цього — тільки кількість.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
 
 // ----------------------------------------------------------------
-// Step 3 — comfort: collapsed disclosure by default
+// Step 4 — Schedule
+// ----------------------------------------------------------------
+
+function ScheduleStep({
+  availability,
+  onAvailability,
+  constraints,
+  onConstraints,
+}: {
+  availability: string[];
+  onAvailability: (v: string[]) => void;
+  constraints: string;
+  onConstraints: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <ChipMultiSelect
+        options={AVAILABILITY_OPTIONS}
+        value={availability}
+        onChange={onAvailability}
+        size="md"
+      />
+      <div className="space-y-2">
+        <Label htmlFor="constraints">Що з графіку важливо врахувати?</Label>
+        <textarea
+          id="constraints"
+          value={constraints}
+          maxLength={500}
+          onChange={(e) => onConstraints(e.target.value)}
+          rows={3}
+          placeholder="наприклад, «маленька дитина — не цілий день»"
+          className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[88px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// Step 5 — Comfort: company / accessibility / triggers
 // ----------------------------------------------------------------
 
 function ComfortStep({
-  open,
-  onToggle,
-  identity,
-  onIdentity,
+  companyPreference,
+  onCompanyPreference,
   accessibility,
   onAccessibility,
-  comfort,
-  onComfort,
+  triggers,
+  onTriggers,
 }: {
-  open: boolean;
-  onToggle: () => void;
-  identity: IdentityPref;
-  onIdentity: (v: IdentityPref) => void;
+  companyPreference: CompanyPreference;
+  onCompanyPreference: (v: CompanyPreference) => void;
   accessibility: AccessibilityFlag[];
   onAccessibility: (v: AccessibilityFlag[]) => void;
-  comfort: string;
-  onComfort: (v: string) => void;
+  triggers: string[];
+  onTriggers: (v: string[]) => void;
 }) {
-  const accSet = useMemo(() => new Set(accessibility), [accessibility]);
   return (
-    <div className="space-y-4">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="bg-card border-border hover:border-primary/40 h-13 flex w-full items-center gap-3 rounded-xl border px-4 transition"
-        style={{ touchAction: "manipulation", height: "52px" }}
-        aria-expanded={open}
-      >
-        <CircleCheck className="text-primary h-5 w-5" aria-hidden />
-        <span className="text-foreground flex-1 text-left text-base font-medium">
-          {open ? "Згорнути" : "Розгорнути"}
-        </span>
-        <ChevronDown
-          className={cn("text-muted-foreground h-5 w-5 transition-transform", open && "rotate-180")}
-          aria-hidden
+    <div className="space-y-5">
+      <SubSection title="В якій компанії бути?">
+        <ChipSingleSelect
+          options={COMPANY_PREFERENCE_OPTIONS}
+          value={companyPreference}
+          onChange={(v) => v && onCompanyPreference(v)}
         />
-      </button>
+      </SubSection>
+      <SubSection title="Доступність">
+        <ChipMultiSelect options={ACCESSIBILITY_OPTIONS} value={accessibility} onChange={onAccessibility} />
+      </SubSection>
+      <SubSection title="Тригери, яких уникати">
+        <ChipMultiSelect options={TRIGGER_OPTIONS} value={triggers} onChange={onTriggers} />
+      </SubSection>
+    </div>
+  );
+}
 
-      {open ? (
-        <div className="space-y-5 pt-1">
-          <div className="space-y-2">
-            <Label>З ким комфортно</Label>
-            <div className="flex flex-wrap gap-2">
-              {IDENTITY_PREFS.map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  onClick={() => onIdentity(p)}
-                  className={cn(
-                    "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
-                    identity === p
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-card text-foreground hover:border-primary/40",
-                  )}
-                  style={{ touchAction: "manipulation" }}
-                  aria-pressed={identity === p}
-                >
-                  {IDENTITY_LABELS_UK[p]}
-                </button>
-              ))}
-            </div>
-          </div>
+// ----------------------------------------------------------------
+// Step 6 — About: status / age / role / bio
+// ----------------------------------------------------------------
 
-          <div className="space-y-2">
-            <Label>Доступність</Label>
-            <div className="flex flex-wrap gap-2">
-              {ACCESSIBILITY_FLAGS.map((f) => {
-                const active = accSet.has(f);
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    onClick={() => {
-                      const next = new Set(accSet);
-                      if (active) next.delete(f);
-                      else next.add(f);
-                      onAccessibility([...next]);
-                    }}
-                    className={cn(
-                      "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
-                      active
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-border bg-card text-foreground hover:border-primary/40",
-                    )}
-                    style={{ touchAction: "manipulation" }}
-                    aria-pressed={active}
-                  >
-                    {ACCESSIBILITY_LABELS_UK[f]}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+function AboutStep({
+  veteranStatus,
+  onVeteranStatus,
+  ageRange,
+  onAgeRange,
+  role,
+  onRole,
+  bio,
+  onBio,
+}: {
+  veteranStatus: VeteranStatus | null;
+  onVeteranStatus: (v: VeteranStatus | null) => void;
+  ageRange: AgeRange | null;
+  onAgeRange: (v: AgeRange | null) => void;
+  role: string;
+  onRole: (v: string) => void;
+  bio: string;
+  onBio: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <SubSection title="Статус">
+        <ChipSingleSelect
+          options={VETERAN_STATUS_OPTIONS}
+          value={veteranStatus}
+          onChange={onVeteranStatus}
+          allowDeselect
+        />
+      </SubSection>
+      <SubSection title="Вік">
+        <ChipSingleSelect
+          options={AGE_RANGE_OPTIONS}
+          value={ageRange}
+          onChange={onAgeRange}
+          allowDeselect
+        />
+      </SubSection>
+      <SubSection title="Що приносиш у збір?">
+        <ChipSingleSelect
+          options={ROLE_IN_GROUP_OPTIONS}
+          value={role || null}
+          onChange={(v) => onRole(v ?? "")}
+          allowDeselect
+        />
+      </SubSection>
+      <SubSection title="Про себе">
+        <textarea
+          value={bio}
+          maxLength={500}
+          onChange={(e) => onBio(e.target.value)}
+          rows={4}
+          placeholder="у вільній формі — кілька речень, які ти хотів би, щоб про тебе знали"
+          className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[100px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
+        />
+        <p className="text-muted-foreground text-right text-xs">{bio.length}/500</p>
+      </SubSection>
+    </div>
+  );
+}
 
-          <div className="space-y-2">
-            <Label htmlFor="comfort">Що ще варто знати</Label>
-            <textarea
-              id="comfort"
-              value={comfort}
-              maxLength={200}
-              onChange={(e) => onComfort(e.target.value)}
-              rows={3}
-              placeholder="наприклад, «зручніше у малих групах»"
-              className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[88px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
-            />
-          </div>
-        </div>
+// ----------------------------------------------------------------
+// Reusable bits
+// ----------------------------------------------------------------
+
+function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label>{title}</Label>
+      {children}
+    </div>
+  );
+}
+
+function ChipMultiSelect<T extends string>({
+  options,
+  value,
+  onChange,
+  emptyHint,
+  size = "sm",
+}: {
+  options: Option<T>[];
+  value: T[];
+  onChange: (v: T[]) => void;
+  emptyHint?: string;
+  size?: "sm" | "md";
+}) {
+  const set = useMemo(() => new Set(value), [value]);
+  const baseClass =
+    size === "md"
+      ? "inline-flex h-11 items-center rounded-full border-2 px-5 text-sm font-medium transition"
+      : "inline-flex h-9 items-center rounded-full border px-3 text-sm transition";
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => {
+          const active = set.has(opt.value);
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => {
+                const next = new Set(set);
+                if (active) next.delete(opt.value);
+                else next.add(opt.value);
+                onChange([...next]);
+              }}
+              className={cn(
+                baseClass,
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-foreground hover:border-primary/40",
+              )}
+              style={{ touchAction: "manipulation" }}
+              aria-pressed={active}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+      {emptyHint && value.length === 0 ? (
+        <p className="text-muted-foreground text-xs">{emptyHint}</p>
       ) : null}
+    </div>
+  );
+}
+
+function ChipSingleSelect<T extends string>({
+  options,
+  value,
+  onChange,
+  allowDeselect = false,
+}: {
+  options: Option<T>[];
+  value: T | null;
+  onChange: (v: T | null) => void;
+  allowDeselect?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(active && allowDeselect ? null : opt.value)}
+            className={cn(
+              "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
+              active
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground hover:border-primary/40",
+            )}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={active}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

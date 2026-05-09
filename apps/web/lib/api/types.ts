@@ -25,17 +25,19 @@ export type AccessibilityFlag =
   | "service_animal_ok";
 
 export type VeteranStatus =
-  // 10 statuses from Ukrainian veteran law (uvbd-1 through uvbd-10) plus 2 extras.
-  | "uvbd_1"
-  | "uvbd_2"
-  | "uvbd_3"
-  | "uvbd_4"
-  | "uvbd_5"
-  | "uvbd_6"
-  | "uvbd_7"
-  | "uvbd_8"
-  | "uvbd_9"
-  | "uvbd_10"
+  // Backend's `veteran_status` enum (auth-backend/SCHEMA.md). Semantic
+  // labels rather than UVBD-N codes — keeps onboarding language plain
+  // ("Маю посвідчення УБД") and matches what the backend stores verbatim.
+  | "ubd"
+  | "volunteer"
+  | "active_duty"
+  | "veteran"
+  | "war_disabled"
+  | "former_pow"
+  | "family_of_fallen"
+  | "family_of_missing"
+  | "family_of_veteran"
+  | "civilian_affected"
   | "in_process"
   | "no_docs";
 
