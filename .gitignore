@@ -40,3 +40,7 @@ supabase/.branches/
 
 # deno keeps its lock under supabase/functions
 /deno.lock
+
+# IDE
+.idea/
+.vscode/

@@ -9,8 +9,8 @@ Living document. Updated after every milestone, with a self-review every 3 miles
 | M1  | Repo skeleton + tooling                       | ✅ done        | `908b3e7` |
 | M2  | Supabase schema + RLS                         | ✅ done        | `aab6171` |
 | M3  | Seed 30 events / 7 orgs / 119 ghost RSVPs     | ✅ done        | `9e2f984` |
-| M4  | Edge function infra (`_shared`)               | ⏳ in progress | —         |
-| M5  | Gemini prompts + 4 functions wired + evals    | ⏳ pending     | —         |
+| M4  | Edge function infra (`_shared`)               | ✅ done        | `312619f` |
+| M5  | Gemini prompts + 4 functions wired + evals    | ✅ done        | (this)    |
 | M6  | Telegram bot edge function + webhook          | ⏳ pending     | —         |
 | M7  | Web design tokens + base components           | ⏳ pending     | —         |
 | M8  | Public event page `/event/[slug]`             | ⏳ pending     | —         |

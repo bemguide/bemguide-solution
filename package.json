@@ -15,8 +15,10 @@
     "db:link": "supabase link",
     "db:push": "supabase db push",
     "db:reset": "supabase db reset",
-    "fn:deploy": "supabase functions deploy",
+    "fn:deploy": "tsx --env-file=.env.local scripts/deploy-functions.ts",
+    "fn:verify": "tsx --env-file=.env.local scripts/verify-functions.ts",
     "fn:serve": "supabase functions serve",
+    "evals": "deno test --allow-net --allow-env --env-file=.env.local supabase/functions/_shared/evals/",
     "tg:webhook:set": "tsx --env-file=.env.local scripts/tg-webhook-set.ts",
     "tg:webhook:info": "tsx --env-file=.env.local scripts/tg-webhook-info.ts",
     "tg:webhook:delete": "tsx --env-file=.env.local scripts/tg-webhook-delete.ts"
