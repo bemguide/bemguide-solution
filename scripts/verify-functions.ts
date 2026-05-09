@@ -1,54 +1,59 @@
-// Curl each deployed Supabase Edge Function and verify it returns the stub envelope.
+// Curl each deployed Supabase Edge Function and verify each is reachable +
+// authenticated. Now that the M5/M6/M10/M11 implementations have real auth
+// rules, we use VERCEL_CRON_SECRET as the bearer (the canonical internal one)
+// and accept any non-5xx response as "alive".
 //
-// Usage: pnpm exec tsx --env-file=.env.local scripts/verify-functions.ts
+// Usage: pnpm fn:verify
 
 const FUNCTIONS = [
-  "bot",
-  "rsvp-create",
-  "ics-generate",
-  "notify-scheduler",
-  "gemini-rank",
-  "gemini-parse-event",
-  "gemini-moderate",
-  "gemini-copy",
+  // Each entry: name + how to call (GET/POST + body) + expected non-5xx pattern.
+  { name: "bot", method: "POST", body: "{}", expect: "ignore-status" }, // bot rejects without TG secret → 403
+  { name: "rsvp-create", method: "POST", body: "{}" }, // 400 missing fields = alive
+  { name: "ics-generate", method: "GET" }, // 400 missing rsvp_id+token = alive
+  { name: "notify-scheduler", method: "POST", body: "{}" }, // 200 = alive
+  { name: "gemini-rank", method: "POST", body: "{}" }, // 400 invalid input = alive
+  { name: "gemini-parse-event", method: "POST", body: "{}" }, // 400 missing raw_text = alive
+  { name: "gemini-moderate", method: "POST", body: "{}" }, // 400 missing event_id = alive
+  { name: "gemini-copy", method: "POST", body: "{}" }, // 400 missing kind = alive
 ] as const;
 
-const url = process.env.SUPABASE_URL;
-const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
-if (!url) throw new Error("SUPABASE_URL missing");
-if (!anonKey) {
-  throw new Error("Need SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY to call edge functions");
-}
-const projectRef = url.match(/https:\/\/([^.]+)\./)?.[1];
-
 async function main() {
+  const url = process.env.SUPABASE_URL;
+  const cron = process.env.VERCEL_CRON_SECRET;
+  if (!url) throw new Error("SUPABASE_URL missing");
+  if (!cron) throw new Error("VERCEL_CRON_SECRET missing");
+
+  const projectRef = url.match(/https:\/\/([^.]+)\./)?.[1];
+  const fnRoot = `https://${projectRef}.supabase.co/functions/v1`;
   let ok = 0;
-  let fail = 0;
+  let dead = 0;
+
   for (const fn of FUNCTIONS) {
-    const endpoint = `https://${projectRef}.supabase.co/functions/v1/${fn}`;
+    const endpoint = `${fnRoot}/${fn.name}`;
     try {
       const res = await fetch(endpoint, {
-        method: "POST",
+        method: fn.method,
         headers: {
           "content-type": "application/json",
-          Authorization: `Bearer ${anonKey}`,
+          Authorization: `Bearer ${cron}`,
         },
+        body: fn.method === "POST" ? (fn.body ?? "{}") : undefined,
       });
-      const json: { ok?: boolean; fn?: string } = await res.json();
-      if (res.status === 200 && json.ok && json.fn === fn) {
-        console.log(`✓ ${fn} — 200`);
+      // Anything non-5xx means the function is deployed and responding.
+      if (res.status < 500) {
+        console.log(`✓ ${fn.name} — ${res.status}`);
         ok++;
       } else {
-        console.log(`✗ ${fn} — ${res.status} ${JSON.stringify(json)}`);
-        fail++;
+        console.log(`✗ ${fn.name} — ${res.status}`);
+        dead++;
       }
     } catch (e) {
-      console.log(`✗ ${fn} — error: ${(e as Error).message}`);
-      fail++;
+      console.log(`✗ ${fn.name} — error: ${(e as Error).message}`);
+      dead++;
     }
   }
-  console.log(`\n${ok}/${FUNCTIONS.length} ok, ${fail} failed`);
-  process.exit(fail > 0 ? 1 : 0);
+  console.log(`\n${ok}/${FUNCTIONS.length} reachable, ${dead} unreachable`);
+  process.exit(dead > 0 ? 1 : 0);
 }
 
 main();

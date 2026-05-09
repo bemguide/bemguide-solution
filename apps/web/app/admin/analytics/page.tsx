@@ -8,8 +8,9 @@ import { formatEventDateTime } from "@/lib/format";
 export default async function AdminAnalyticsPage() {
   await requireAdmin();
   const supabase = serverSupabase();
-  const since30d = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
-  const since7d = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  const now = Date.now();
+  const since30d = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
+  const since7d = new Date(now - 7 * 24 * 3600 * 1000).toISOString();
 
   const [
     { count: activeVeterans },
