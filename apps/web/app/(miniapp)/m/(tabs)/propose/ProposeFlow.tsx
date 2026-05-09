@@ -59,6 +59,7 @@ import {
   tgOpenLocationSettings,
 } from "@/lib/telegram/client";
 import { isWithinCityBounds } from "@/lib/cities";
+import { reverseGeocode } from "@/lib/geocode";
 
 // Leaflet bundles ~42KB gz of JS + 13KB of CSS — split it off the
 // onboarding/feed/me surfaces so only proposers pay for it.
@@ -130,6 +131,7 @@ export function ProposeFlow() {
   const [submitted, setSubmitted] = useState<{ id: string } | null>(null);
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<LocateError>(null);
+  const [geocoding, setGeocoding] = useState(false);
   const [form, setForm] = useState<FormState>({
     title: "",
     description: "",
@@ -154,6 +156,11 @@ export function ProposeFlow() {
   const timeRef = useRef<HTMLInputElement>(null);
   const cityFieldsetRef = useRef<HTMLDivElement>(null);
   const mapWrapperRef = useRef<HTMLDivElement>(null);
+  // Track whether the user has typed something into the address input.
+  // Empty → we'll auto-fill on the next pin change. Non-empty → leave
+  // their text alone, even when they later move the pin. Stored in a
+  // ref so the geocode effect doesn't re-run on every keystroke.
+  const addressTouchedRef = useRef(false);
 
   // Pre-fill the city from the user's profile.
   useEffect(() => {
@@ -172,6 +179,38 @@ export function ProposeFlow() {
       cancelled = true;
     };
   }, []);
+
+  // Reverse-geocode the pin into the address field. Skips when the user
+  // has already typed something — their text wins. We deliberately only
+  // depend on `form.pin` so typing in the address field doesn't refire
+  // the request; `addressTouchedRef` is checked at fire and at response
+  // time to handle a user who types while a request is in flight.
+  useEffect(() => {
+    const pin = form.pin;
+    if (!pin) return;
+    if (addressTouchedRef.current) return;
+
+    let cancelled = false;
+    setGeocoding(true);
+    reverseGeocode(pin.lat, pin.lng)
+      .then((addr) => {
+        if (cancelled || !addr) return;
+        setForm((f) => {
+          // Stale: user moved the pin again before we got the response.
+          if (f.pin !== pin) return f;
+          // User typed something during the fetch — don't clobber it.
+          if (addressTouchedRef.current) return f;
+          return { ...f, address: addr };
+        });
+      })
+      .finally(() => {
+        if (!cancelled) setGeocoding(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [form.pin]);
 
   function buildStartAt(): string | null {
     if (!form.date || !form.time) return null;
@@ -361,9 +400,17 @@ export function ProposeFlow() {
   const pinInvalid = err?.field === "pin";
 
   return (
-    <main className="flex flex-1 flex-col">
+    // `min-h-0` on both <main> and <form>: nested flex-col items default
+    // to `min-height: auto` (= min-content height) which prevents them
+    // from shrinking below their content. With content taller than the
+    // TMA viewport the form would balloon past its flex slot, push the
+    // CTA off-screen, and never engage `overflow-y-auto` — visible on
+    // desktop TG as "no wheel scroll." `min-h-0` lets each flex child
+    // shrink to its allocated space so the form actually becomes a
+    // scroll container.
+    <main className="flex min-h-0 flex-1 flex-col">
       <form
-        className="flex-1 space-y-6 overflow-y-auto px-4 pb-6 pt-6"
+        className="min-h-0 flex-1 space-y-6 overflow-y-auto px-4 pb-6 pt-6"
         aria-busy={busy}
         noValidate
         onSubmit={(e) => {
@@ -489,19 +536,39 @@ export function ProposeFlow() {
             ) : null}
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-1">
             <Label htmlFor="address">Адреса (необов'язково)</Label>
             <Input
               id="address"
               value={form.address}
-              onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
+              onChange={(e) => {
+                const v = e.target.value;
+                // Empty text re-enables auto-fill on the next pin change;
+                // non-empty marks the field as user-owned.
+                addressTouchedRef.current = v.trim().length > 0;
+                setForm((f) => ({ ...f, address: v }));
+              }}
               placeholder="наприклад, бібліотека ім. Лесі Українки, вул. Грушевського 5"
               maxLength={200}
               autoComplete="street-address"
               autoCapitalize="sentences"
               enterKeyHint="next"
+              aria-describedby={geocoding ? "address-geocoding" : undefined}
               className={inputClasses}
             />
+            {geocoding ? (
+              <p
+                id="address-geocoding"
+                className="text-muted-foreground text-xs"
+                aria-live="polite"
+              >
+                Визначаємо адресу…
+              </p>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                Заповнюємо автоматично з мітки на мапі. Можеш уточнити вручну.
+              </p>
+            )}
           </div>
         </Section>
 
