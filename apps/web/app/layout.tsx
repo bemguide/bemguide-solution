@@ -26,8 +26,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="uk" className={cn("h-full antialiased", inter.variable)}>
-      <body className="bg-background text-foreground min-h-full font-sans">{children}</body>
+    // Telegram WebApp's script writes `--tg-viewport-*` CSS vars onto <html> and
+    // `<body>` before React hydrates, which would otherwise abort hydration —
+    // bail-out leaves the page interactive in markup but with no event handlers
+    // attached, so every click silently does nothing. suppressHydrationWarning
+    // tells React to keep going past the cosmetic style mismatch.
+    <html lang="uk" className={cn("h-full antialiased", inter.variable)} suppressHydrationWarning>
+      <body className="bg-background text-foreground min-h-full font-sans" suppressHydrationWarning>
+        {children}
+      </body>
     </html>
   );
 }
