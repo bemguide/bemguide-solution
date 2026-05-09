@@ -17,7 +17,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
@@ -51,14 +51,14 @@ function adapt(sections: V2FeedSections): DisplaySections {
 }
 
 export function FeedClient() {
-  // Hydrate from cache so first paint already has content (when
-  // anything is cached) — typical return-visit case.
-  const cached = useMemo(() => readFeedCache(), []);
-
-  const [sections, setSections] = useState<DisplaySections | null>(
-    cached ? adapt(cached.sections) : null,
-  );
-  const [city, setCity] = useState<string | undefined>(cached?.city);
+  // Initial state must match server-render output to avoid hydration
+  // mismatches: localStorage isn't available during SSR, so reading
+  // the cache here would diverge from the server's null. Cache reads
+  // happen in useEffect (after mount) — costs us one extra render
+  // when there is a cache, but keeps SSR and the first client paint
+  // structurally identical.
+  const [sections, setSections] = useState<DisplaySections | null>(null);
+  const [city, setCity] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(true);
   const ranRef = useRef(false);
@@ -69,6 +69,15 @@ export function FeedClient() {
 
     let cancelled = false;
     const startedAt = performance.now();
+
+    // Hydrate-from-cache step (post-mount, so SSR and first paint
+    // agree). If anything's cached, swap state immediately so the
+    // network round-trip happens against an already-populated view.
+    const cached = readFeedCache();
+    if (cached) {
+      setSections(adapt(cached.sections));
+      setCity(cached.city ?? undefined);
+    }
 
     async function load() {
       try {
@@ -100,7 +109,7 @@ export function FeedClient() {
         logApiError("feed", e);
         // Only surface an error if we have *nothing* to show. With
         // cached data we keep the stale view and stay quiet.
-        if (!sections) {
+        if (!cached) {
           if (isNoTelegramEnv(e)) setError("no_telegram_environment");
           else setError(describeError(e, "feed"));
         }
@@ -112,7 +121,6 @@ export function FeedClient() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // The "Open in Telegram" CTA is its own dedicated screen — don't
