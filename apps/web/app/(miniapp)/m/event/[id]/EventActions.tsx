@@ -183,8 +183,6 @@ function AttendingBar({
   return (
     <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
       <div className="space-y-2">
-        <p className="text-primary text-center text-sm font-semibold">Ти йдеш</p>
-
         {room?.chat_invite_url ? (
           <Button asChild size="lg" className="h-12 w-full text-base font-semibold">
             <a href={room.chat_invite_url} target="_blank" rel="noopener noreferrer">
@@ -203,69 +201,42 @@ function AttendingBar({
         )}
 
         <div className="grid grid-cols-2 gap-2">
-          <PrivacyChip
-            active={!showName}
-            onClick={() => void togglePrivacy(false)}
-            label="Анонімно"
-          />
-          <PrivacyChip
-            active={showName}
-            onClick={() => void togglePrivacy(true)}
-            label="Показати ім'я"
-          />
-        </div>
-
-        <div className="flex items-center justify-between pt-1 text-xs">
-          <button
+          <Button
             type="button"
+            variant="outline"
+            className="h-11"
             onClick={() => void onShareUrl()}
-            className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1.5 underline-offset-2 hover:underline"
-            style={{ touchAction: "manipulation" }}
           >
-            <Share2 className="h-3.5 w-3.5" aria-hidden />
+            <Share2 className="mr-1.5 h-4 w-4" aria-hidden />
             Поділитися
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="outline"
+            className="h-11"
             onClick={() => void decline()}
             disabled={busy}
-            className="text-muted-foreground hover:text-destructive underline-offset-2 hover:underline disabled:opacity-50"
-            style={{ touchAction: "manipulation" }}
           >
             Не зможу
-          </button>
+          </Button>
         </div>
+
+        <button
+          type="button"
+          onClick={() => void togglePrivacy(!showName)}
+          className={cn(
+            "block w-full text-center text-xs underline-offset-2 hover:underline",
+            showName ? "text-primary" : "text-muted-foreground hover:text-foreground",
+          )}
+          style={{ touchAction: "manipulation" }}
+          aria-pressed={showName}
+        >
+          {showName ? "Показую ім'я · натисни щоб приховати" : "Анонімно · натисни щоб показати ім'я"}
+        </button>
 
         {error ? <p className="text-destructive text-xs">{error}</p> : null}
       </div>
     </div>
-  );
-}
-
-function PrivacyChip({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{ touchAction: "manipulation" }}
-      className={cn(
-        "h-9 rounded-full border text-sm transition",
-        active
-          ? "border-primary bg-primary text-primary-foreground"
-          : "border-border bg-card text-foreground hover:border-primary/40",
-      )}
-    >
-      {label}
-    </button>
   );
 }
 
