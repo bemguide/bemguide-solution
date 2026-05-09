@@ -1,18 +1,17 @@
-// Six-step onboarding that captures all 12 v2 user fields:
+// Conversational onboarding — Telegram-chat aesthetic over the v2
+// `users` schema. Seven screens (0–6) ending at /m/feed:
 //
-//   Step 1 — Місто               → users.city
-//   Step 2 — Як звертатися         → users.display_name + users.show_name_publicly
-//   Step 3 — Інтереси             → users.interests
-//   Step 4 — Графік               → users.availability + users.schedule_constraints
-//   Step 5 — Що для комфорту       → users.company_preference
-//                                  + users.accessibility_flags
-//                                  + users.triggers_to_avoid
-//   Step 6 — Про тебе              → users.veteran_status + users.age_range
-//                                  + users.role_in_group + users.bio
+//   Step 0 — Greeting (zero-Q)
+//   Step 1 — Місто (Q1)                          → users.city
+//   Step 2 — Ім'я (Q2)                            → display_name + show_name_publicly
+//   Step 3 — Що цікаво (Q3)                       → interests
+//   Step 4 — Графік (Q4 + Q5)                     → availability + schedule_constraints
+//   Step 5 — Що для комфорту (Q6 + Q7 + Q8)        → company_preference, accessibility_flags, triggers_to_avoid
+//   Step 6 — Про тебе (Q9 + Q10 + Q11 + Q12)        → veteran_status, age_range, role_in_group, bio
 //
 // Each step PATCHes /me with its slice. The backend's
-// users_match_recompute trigger rebuilds event_matches under the hood,
-// so the next /feed fetch is already personalised.
+// users_match_recompute trigger fans the change into event_matches so
+// the next /feed call is already personalised.
 //
 // Deep-link bypass kept verbatim from the v1 lane:
 //   - `evt_<id>`   → skip onboarding to /m/event/<id>
@@ -24,9 +23,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LocateFixed, MapPin, X } from "lucide-react";
 import { DEMO_CITIES } from "@poruch/shared";
-import { OnboardingCard } from "@/components/poruch/OnboardingCard";
+import {
+  BotBubble,
+  ChatLabel,
+  OnboardingChat,
+} from "@/components/poruch/OnboardingChat";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   getStartParam,
   getTgUser,
@@ -57,11 +59,13 @@ import {
   type Option,
 } from "./options";
 
+// 0 (greeting) through 6 (about). The chat header's progress dots use
+// `total` = 6 (we don't dot the greeting since it's a "tap to start").
 const TOTAL_STEPS = 6;
+type StepIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 const NEAREST_CITIES = [...DEMO_CITIES] as const;
 
-// Approximate centroids for "Визначити автоматично" → nearest demo city.
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
   Київ: { lat: 50.4501, lng: 30.5234 },
   Львів: { lat: 49.8397, lng: 24.0297 },
@@ -86,21 +90,15 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
 }
 
 type FormState = {
-  // Step 1
   city: string;
-  // Step 2
   displayName: string;
   showNamePublicly: boolean;
-  // Step 3
   interests: string[];
-  // Step 4
   availability: string[];
   scheduleConstraints: string;
-  // Step 5
   companyPreference: CompanyPreference;
   accessibility: AccessibilityFlag[];
   triggers: string[];
-  // Step 6
   veteranStatus: VeteranStatus | null;
   ageRange: AgeRange | null;
   roleInGroup: string;
@@ -125,17 +123,16 @@ const initialState: FormState = {
 
 export function OnboardingFlow() {
   const router = useRouter();
-  const [step, setStep] = useState<1 | 2 | 3 | 4 | 5 | 6>(1);
+  const [step, setStep] = useState<StepIndex>(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bypassed, setBypassed] = useState(false);
   const [state, setState] = useState<FormState>(initialState);
 
-  // Step 1 state — geolocation UI.
+  // Step 1 — geolocation UI state.
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
-  // Deep-link bypass.
   useEffect(() => {
     const param = getStartParam();
     if (param.startsWith("evt_")) {
@@ -148,7 +145,6 @@ export function OnboardingFlow() {
       router.replace("/m/feed");
       return;
     }
-    // Pre-fill display_name from Telegram first_name (user can edit on Step 2).
     const tg = getTgUser();
     if (tg.firstName) setState((s) => ({ ...s, displayName: tg.firstName ?? "" }));
   }, [router]);
@@ -160,39 +156,32 @@ export function OnboardingFlow() {
       await updateCurrentUser(patch);
       return true;
     } catch (e) {
-      // Non-fatal: log + show but let the user keep going. Onboarding
-      // is skip-able; we don't gate forward navigation behind a
-      // backend hiccup. `logApiError` surfaces the backend's `details`
-      // field in dev (e.g. "Invalid API key" from Supabase) so you
-      // don't have to curl the route to find out what's wrong.
       logApiError("onboarding", e);
       setError(describeError(e, "onboarding"));
       return false;
     }
   }
 
-  async function advance(patch: UserPatch | null, next: typeof step | "done") {
+  async function advance(patch: UserPatch | null, next: StepIndex | "done") {
     setBusy(true);
     setError(null);
     try {
-      if (patch && Object.keys(patch).length > 0) {
-        await persist(patch);
-      }
-      if (next === "done") {
-        router.push("/m/feed");
-      } else {
-        setStep(next);
-      }
+      if (patch && Object.keys(patch).length > 0) await persist(patch);
+      if (next === "done") router.push("/m/feed");
+      else setStep(next);
     } finally {
       setBusy(false);
     }
   }
 
-  // ----- Step handlers (each builds its own patch) -----
+  // ---------- Step commits (no PATCH on greeting) ----------
+
+  function commitStep0() {
+    void advance(null, 1);
+  }
 
   function commitStep1(skip = false) {
-    const patch: UserPatch = skip || !state.city.trim() ? {} : { city: state.city.trim() };
-    void advance(patch, 2);
+    void advance(skip || !state.city.trim() ? {} : { city: state.city.trim() }, 2);
   }
 
   function commitStep2(skip = false) {
@@ -250,7 +239,7 @@ export function OnboardingFlow() {
     );
   }
 
-  // ----- Step 1 geolocation handlers -----
+  // ---------- Step 1 geolocation ----------
 
   async function detectLocation() {
     if (locating) return;
@@ -275,151 +264,618 @@ export function OnboardingFlow() {
     }
   }
 
+  // ---------- Render ----------
+
+  if (step === 0) {
+    return (
+      <OnboardingChat
+        step={0}
+        total={TOTAL_STEPS}
+        primaryLabel="🟢 Подивитись поруч"
+        busy={busy}
+        onPrimary={commitStep0}
+      >
+        <BotBubble>
+          Привіт. Я допомагаю ветеранам зібратися разом — на каву, прогулянку, спорт.
+        </BotBubble>
+        <BotBubble>Більшість того, що тут — безкоштовне.</BotBubble>
+        <BotBubble>Без папок, без анкет.</BotBubble>
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
+  if (step === 1) {
+    return (
+      <OnboardingChat
+        step={1}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Не зараз, тільки гляну"
+        busy={busy}
+        onPrimary={() => commitStep1(false)}
+        onSkip={() => commitStep1(true)}
+      >
+        <BotBubble>Покажу що поруч. Ти зараз де?</BotBubble>
+        <CityStep
+          value={state.city}
+          onChange={(city) => setState({ ...state, city })}
+          onDetect={() => void detectLocation()}
+          onOpenSettings={tgOpenLocationSettings}
+          locating={locating}
+          locateError={locateError}
+        />
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
+  if (step === 2) {
+    return (
+      <OnboardingChat
+        step={2}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => commitStep2(false)}
+        onSkip={() => commitStep2(true)}
+      >
+        <BotBubble>
+          Як до тебе звертатися? Можна анонімно — тоді інші бачитимуть тільки кількість.
+        </BotBubble>
+        <NameStep
+          displayName={state.displayName}
+          onDisplayName={(displayName) => setState({ ...state, displayName })}
+          showPublicly={state.showNamePublicly}
+          onShowPublicly={(showNamePublicly) => setState({ ...state, showNamePublicly })}
+        />
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
+  if (step === 3) {
+    return (
+      <OnboardingChat
+        step={3}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => commitStep3(false)}
+        onSkip={() => commitStep3(true)}
+      >
+        <BotBubble>Що ще цікаво? Можна нічого.</BotBubble>
+        <ChipMultiSelect
+          options={INTEREST_OPTIONS}
+          value={state.interests}
+          onChange={(interests) => setState({ ...state, interests })}
+        />
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
+  if (step === 4) {
+    return (
+      <OnboardingChat
+        step={4}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => commitStep4(false)}
+        onSkip={() => commitStep4(true)}
+      >
+        <BotBubble>Коли тобі зручно? Що з графіку важливо врахувати?</BotBubble>
+        <ScheduleStep
+          availability={state.availability}
+          onAvailability={(availability) => setState({ ...state, availability })}
+          constraints={state.scheduleConstraints}
+          onConstraints={(scheduleConstraints) => setState({ ...state, scheduleConstraints })}
+        />
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
+  if (step === 5) {
+    return (
+      <OnboardingChat
+        step={5}
+        total={TOTAL_STEPS}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => commitStep5(false)}
+        onSkip={() => commitStep5(true)}
+      >
+        <BotBubble>
+          Що важливо для комфорту? Усе опційно — і можна змінити будь-коли.
+        </BotBubble>
+        <ComfortStep
+          companyPreference={state.companyPreference}
+          onCompanyPreference={(companyPreference) => setState({ ...state, companyPreference })}
+          accessibility={state.accessibility}
+          onAccessibility={(accessibility) => setState({ ...state, accessibility })}
+          triggers={state.triggers}
+          onTriggers={(triggers) => setState({ ...state, triggers })}
+        />
+        {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+      </OnboardingChat>
+    );
+  }
+
   return (
-    <>
-      {error ? (
-        <div className="bg-destructive/10 text-destructive border-destructive/30 mx-4 mt-2 rounded-md border px-3 py-2 text-sm">
-          {error}
-        </div>
-      ) : null}
-
-      {step === 1 ? (
-        <OnboardingCard
-          step={1}
-          total={TOTAL_STEPS}
-          title="Де ти зараз?"
-          subtitle="Щоб показати тільки те, що поруч."
-          primaryLabel="Далі"
-          busy={busy}
-          onPrimary={() => commitStep1(false)}
-          onSkip={() => commitStep1(true)}
-        >
-          <CityStep
-            value={state.city}
-            onChange={(city) => setState({ ...state, city })}
-            onDetect={() => void detectLocation()}
-            onOpenSettings={tgOpenLocationSettings}
-            locating={locating}
-            locateError={locateError}
-          />
-        </OnboardingCard>
-      ) : null}
-
-      {step === 2 ? (
-        <OnboardingCard
-          step={2}
-          total={TOTAL_STEPS}
-          title="Як до тебе звертатися?"
-          subtitle="Можна анонімно — інші бачитимуть тільки кількість, не імена."
-          primaryLabel="Далі"
-          busy={busy}
-          onPrimary={() => commitStep2(false)}
-          onSkip={() => commitStep2(true)}
-        >
-          <NameStep
-            displayName={state.displayName}
-            onDisplayName={(displayName) => setState({ ...state, displayName })}
-            showPublicly={state.showNamePublicly}
-            onShowPublicly={(showNamePublicly) => setState({ ...state, showNamePublicly })}
-          />
-        </OnboardingCard>
-      ) : null}
-
-      {step === 3 ? (
-        <OnboardingCard
-          step={3}
-          total={TOTAL_STEPS}
-          title="Що цікаво?"
-          subtitle="Кілька — або жодного. Все одно покажемо щось поруч."
-          primaryLabel="Далі"
-          busy={busy}
-          onPrimary={() => commitStep3(false)}
-          onSkip={() => commitStep3(true)}
-        >
-          <ChipMultiSelect
-            options={INTEREST_OPTIONS}
-            value={state.interests}
-            onChange={(interests) => setState({ ...state, interests })}
-            emptyHint="Нічого не вибрано — це нормально."
-          />
-        </OnboardingCard>
-      ) : null}
-
-      {step === 4 ? (
-        <OnboardingCard
-          step={4}
-          total={TOTAL_STEPS}
-          title="Коли тобі зручно?"
-          subtitle="Допоможе підбирати події під твій ритм."
-          primaryLabel="Далі"
-          busy={busy}
-          onPrimary={() => commitStep4(false)}
-          onSkip={() => commitStep4(true)}
-        >
-          <ScheduleStep
-            availability={state.availability}
-            onAvailability={(availability) => setState({ ...state, availability })}
-            constraints={state.scheduleConstraints}
-            onConstraints={(scheduleConstraints) =>
-              setState({ ...state, scheduleConstraints })
-            }
-          />
-        </OnboardingCard>
-      ) : null}
-
-      {step === 5 ? (
-        <OnboardingCard
-          step={5}
-          total={TOTAL_STEPS}
-          title="Що важливо для комфорту?"
-          subtitle="Усе опційно. Можна змінити будь-коли."
-          primaryLabel="Далі"
-          busy={busy}
-          onPrimary={() => commitStep5(false)}
-          onSkip={() => commitStep5(true)}
-        >
-          <ComfortStep
-            companyPreference={state.companyPreference}
-            onCompanyPreference={(companyPreference) =>
-              setState({ ...state, companyPreference })
-            }
-            accessibility={state.accessibility}
-            onAccessibility={(accessibility) => setState({ ...state, accessibility })}
-            triggers={state.triggers}
-            onTriggers={(triggers) => setState({ ...state, triggers })}
-          />
-        </OnboardingCard>
-      ) : null}
-
-      {step === 6 ? (
-        <OnboardingCard
-          step={6}
-          total={TOTAL_STEPS}
-          title="Про тебе"
-          subtitle="Це для матчингу — нікому не показуємо без твого дозволу."
-          primaryLabel="Готово"
-          busy={busy}
-          onPrimary={() => commitStep6(false)}
-          onSkip={() => commitStep6(true)}
-        >
-          <AboutStep
-            veteranStatus={state.veteranStatus}
-            onVeteranStatus={(veteranStatus) => setState({ ...state, veteranStatus })}
-            ageRange={state.ageRange}
-            onAgeRange={(ageRange) => setState({ ...state, ageRange })}
-            role={state.roleInGroup}
-            onRole={(roleInGroup) => setState({ ...state, roleInGroup })}
-            bio={state.bio}
-            onBio={(bio) => setState({ ...state, bio })}
-          />
-        </OnboardingCard>
-      ) : null}
-    </>
+    <OnboardingChat
+      step={6}
+      total={TOTAL_STEPS}
+      primaryLabel="Готово"
+      skipLabel="Пропустити"
+      busy={busy}
+      onPrimary={() => commitStep6(false)}
+      onSkip={() => commitStep6(true)}
+    >
+      <BotBubble>Останнє — про тебе. Це для матчингу, ніхто інший не побачить.</BotBubble>
+      <AboutStep
+        veteranStatus={state.veteranStatus}
+        onVeteranStatus={(veteranStatus) => setState({ ...state, veteranStatus })}
+        ageRange={state.ageRange}
+        onAgeRange={(ageRange) => setState({ ...state, ageRange })}
+        role={state.roleInGroup}
+        onRole={(roleInGroup) => setState({ ...state, roleInGroup })}
+        bio={state.bio}
+        onBio={(bio) => setState({ ...state, bio })}
+      />
+      {error ? <ErrorBubble>{error}</ErrorBubble> : null}
+    </OnboardingChat>
   );
 }
 
 // ----------------------------------------------------------------
-// Helpers shared by step handlers
+// Step body components
+// ----------------------------------------------------------------
+
+function CityStep({
+  value,
+  onChange,
+  onDetect,
+  onOpenSettings,
+  locating,
+  locateError,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onDetect: () => void;
+  onOpenSettings: () => void;
+  locating: boolean;
+  locateError: string | null;
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {NEAREST_CITIES.map((c) => {
+          const active = value === c;
+          return (
+            <button
+              key={c}
+              type="button"
+              onClick={() => onChange(c)}
+              className={cn(
+                "inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm transition",
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-foreground hover:border-primary/40",
+              )}
+              style={{ touchAction: "manipulation" }}
+              aria-pressed={active}
+            >
+              <MapPin className="h-3.5 w-3.5" aria-hidden />
+              {c}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="relative">
+        <MapPin
+          className="text-muted-foreground pointer-events-none absolute left-3.5 top-1/2 h-4.5 w-4.5 -translate-y-1/2"
+          aria-hidden
+        />
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="інше місто"
+          autoComplete="address-level2"
+          className="bg-card border-border focus-visible:border-primary focus-visible:ring-primary/20 placeholder:text-muted-foreground h-11 w-full rounded-xl border pl-10 pr-10 text-base focus-visible:outline-none focus-visible:ring-2"
+          style={{ touchAction: "manipulation" }}
+          aria-label="Місто"
+        />
+        {value ? (
+          <button
+            type="button"
+            onClick={() => onChange("")}
+            className="text-muted-foreground hover:bg-muted absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full"
+            aria-label="Очистити"
+            style={{ touchAction: "manipulation" }}
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        ) : null}
+      </div>
+
+      <button
+        type="button"
+        onClick={onDetect}
+        disabled={locating}
+        className="text-primary inline-flex items-center gap-1.5 rounded-md py-1.5 text-sm font-medium underline-offset-2 hover:underline disabled:opacity-60"
+        style={{ touchAction: "manipulation" }}
+      >
+        <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} aria-hidden />
+        {locating ? "Шукаю…" : "Визначити автоматично"}
+      </button>
+      <LocateError error={locateError} onOpenSettings={onOpenSettings} />
+    </div>
+  );
+}
+
+function LocateError({
+  error,
+  onOpenSettings,
+}: {
+  error: string | null;
+  onOpenSettings: () => void;
+}) {
+  if (!error) return null;
+  if (error === "denied:tg") {
+    return (
+      <div className="text-destructive space-y-1 text-xs">
+        <p>Telegram заблокував доступ до геолокації для цього додатка.</p>
+        <button
+          type="button"
+          onClick={onOpenSettings}
+          className="text-primary inline-flex underline-offset-2 hover:underline"
+        >
+          Відкрити налаштування
+        </button>
+      </div>
+    );
+  }
+  if (error === "denied:browser") {
+    return (
+      <div className="text-destructive space-y-1 text-xs">
+        <p>Браузер заблокував геолокацію.</p>
+        <p className="text-muted-foreground">
+          Дозволь у налаштуваннях сайту або введи місто вручну.
+        </p>
+      </div>
+    );
+  }
+  if (error === "fail") {
+    return <p className="text-destructive text-xs">Не вдалось визначити. Введи вручну.</p>;
+  }
+  return <p className="text-destructive text-xs">{error}</p>;
+}
+
+function NameStep({
+  displayName,
+  onDisplayName,
+  showPublicly,
+  onShowPublicly,
+}: {
+  displayName: string;
+  onDisplayName: (v: string) => void;
+  showPublicly: boolean;
+  onShowPublicly: (v: boolean) => void;
+}) {
+  const trimmed = displayName.trim();
+  const hasName = trimmed.length > 0;
+  const mode: "anon" | "public" = hasName && showPublicly ? "public" : "anon";
+
+  return (
+    <div className="space-y-3">
+      <Input
+        value={displayName}
+        onChange={(e) => onDisplayName(e.target.value)}
+        placeholder="наприклад, Дмитро"
+        maxLength={120}
+        autoComplete="given-name"
+      />
+      <div className="grid grid-cols-2 gap-2">
+        <ModeChip
+          active={mode === "anon"}
+          onClick={() => onShowPublicly(false)}
+          title="Анонімно"
+          subtitle="Видно тільки кількість"
+        />
+        <ModeChip
+          active={mode === "public"}
+          disabled={!hasName}
+          onClick={() => onShowPublicly(true)}
+          title={`Показувати «${trimmed || "ім'я"}»`}
+          subtitle={hasName ? "Імʼя серед тих, хто йде" : "Спершу введи ім'я"}
+        />
+      </div>
+      <p className="text-muted-foreground px-1 text-xs">
+        Для кожної події можна окремо.
+      </p>
+    </div>
+  );
+}
+
+function ModeChip({
+  active,
+  disabled,
+  onClick,
+  title,
+  subtitle,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      aria-pressed={active}
+      style={{ touchAction: "manipulation" }}
+      className={cn(
+        "flex h-auto min-h-[64px] flex-col items-start justify-center gap-0.5 rounded-xl border-2 px-3 py-2 text-left transition",
+        active
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-border bg-card text-foreground hover:border-primary/40",
+        disabled && "cursor-not-allowed opacity-50",
+      )}
+    >
+      <span className="text-sm font-semibold leading-tight">{title}</span>
+      <span
+        className={cn(
+          "text-xs leading-tight",
+          active ? "text-primary-foreground/85" : "text-muted-foreground",
+        )}
+      >
+        {subtitle}
+      </span>
+    </button>
+  );
+}
+
+function ScheduleStep({
+  availability,
+  onAvailability,
+  constraints,
+  onConstraints,
+}: {
+  availability: string[];
+  onAvailability: (v: string[]) => void;
+  constraints: string;
+  onConstraints: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-3">
+      <ChipMultiSelect
+        options={AVAILABILITY_OPTIONS}
+        value={availability}
+        onChange={onAvailability}
+      />
+      <ChatLabel>Що з графіку врахувати</ChatLabel>
+      <textarea
+        value={constraints}
+        maxLength={500}
+        onChange={(e) => onConstraints(e.target.value)}
+        rows={3}
+        placeholder="наприклад, «маленька дитина — не цілий день»"
+        className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[88px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
+      />
+    </div>
+  );
+}
+
+function ComfortStep({
+  companyPreference,
+  onCompanyPreference,
+  accessibility,
+  onAccessibility,
+  triggers,
+  onTriggers,
+}: {
+  companyPreference: CompanyPreference;
+  onCompanyPreference: (v: CompanyPreference) => void;
+  accessibility: AccessibilityFlag[];
+  onAccessibility: (v: AccessibilityFlag[]) => void;
+  triggers: string[];
+  onTriggers: (v: string[]) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <ChatLabel>В якій компанії бути</ChatLabel>
+        <ChipSingleSelect
+          options={COMPANY_PREFERENCE_OPTIONS}
+          value={companyPreference}
+          onChange={(v) => v && onCompanyPreference(v)}
+        />
+      </div>
+      <div className="space-y-2">
+        <ChatLabel>Доступність</ChatLabel>
+        <ChipMultiSelect
+          options={ACCESSIBILITY_OPTIONS}
+          value={accessibility}
+          onChange={onAccessibility}
+        />
+      </div>
+      <div className="space-y-2">
+        <ChatLabel>Тригери, яких уникати</ChatLabel>
+        <ChipMultiSelect options={TRIGGER_OPTIONS} value={triggers} onChange={onTriggers} />
+      </div>
+    </div>
+  );
+}
+
+function AboutStep({
+  veteranStatus,
+  onVeteranStatus,
+  ageRange,
+  onAgeRange,
+  role,
+  onRole,
+  bio,
+  onBio,
+}: {
+  veteranStatus: VeteranStatus | null;
+  onVeteranStatus: (v: VeteranStatus | null) => void;
+  ageRange: AgeRange | null;
+  onAgeRange: (v: AgeRange | null) => void;
+  role: string;
+  onRole: (v: string) => void;
+  bio: string;
+  onBio: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <ChatLabel>Статус</ChatLabel>
+        <ChipSingleSelect
+          options={VETERAN_STATUS_OPTIONS}
+          value={veteranStatus}
+          onChange={onVeteranStatus}
+          allowDeselect
+        />
+      </div>
+      <div className="space-y-2">
+        <ChatLabel>Вік</ChatLabel>
+        <ChipSingleSelect
+          options={AGE_RANGE_OPTIONS}
+          value={ageRange}
+          onChange={onAgeRange}
+          allowDeselect
+        />
+      </div>
+      <div className="space-y-2">
+        <ChatLabel>Що приносиш у збір</ChatLabel>
+        <ChipSingleSelect
+          options={ROLE_IN_GROUP_OPTIONS}
+          value={role || null}
+          onChange={(v) => onRole(v ?? "")}
+          allowDeselect
+        />
+      </div>
+      <div className="space-y-2">
+        <ChatLabel>Про себе (вільно)</ChatLabel>
+        <textarea
+          value={bio}
+          maxLength={500}
+          onChange={(e) => onBio(e.target.value)}
+          rows={4}
+          placeholder="кілька речень — як комфортно з тобою, що тобі важливо"
+          className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[100px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
+        />
+        <p className="text-muted-foreground text-right text-xs">{bio.length}/500</p>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// Reusable bits
+// ----------------------------------------------------------------
+
+function ErrorBubble({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex">
+      <div className="bg-destructive/10 text-destructive border-destructive/30 max-w-[88%] rounded-2xl rounded-tl-md border px-3 py-2 text-sm">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function ChipMultiSelect<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: Option<T>[];
+  value: T[];
+  onChange: (v: T[]) => void;
+}) {
+  const set = useMemo(() => new Set(value), [value]);
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => {
+        const active = set.has(opt.value);
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => {
+              const next = new Set(set);
+              if (active) next.delete(opt.value);
+              else next.add(opt.value);
+              onChange([...next]);
+            }}
+            className={cn(
+              "inline-flex h-10 items-center rounded-full border px-4 text-sm transition",
+              active
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground hover:border-primary/40",
+            )}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={active}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChipSingleSelect<T extends string>({
+  options,
+  value,
+  onChange,
+  allowDeselect = false,
+}: {
+  options: Option<T>[];
+  value: T | null;
+  onChange: (v: T | null) => void;
+  allowDeselect?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => {
+        const active = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(active && allowDeselect ? null : opt.value)}
+            className={cn(
+              "inline-flex h-9 items-center rounded-full border px-3.5 text-sm transition",
+              active
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-card text-foreground hover:border-primary/40",
+            )}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={active}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ----------------------------------------------------------------
+// Helpers
 // ----------------------------------------------------------------
 
 function pickNearestCity(here: { lat: number; lng: number }): string {
@@ -448,484 +904,4 @@ function browserGeolocate(): Promise<{ lat: number; lng: number } | "denied" | "
       { timeout: 6000, maximumAge: 60_000 },
     );
   });
-}
-
-// ----------------------------------------------------------------
-// Step 1 — City picker
-// ----------------------------------------------------------------
-
-function CityStep({
-  value,
-  onChange,
-  onDetect,
-  onOpenSettings,
-  locating,
-  locateError,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onDetect: () => void;
-  onOpenSettings: () => void;
-  locating: boolean;
-  locateError: string | null;
-}) {
-  return (
-    <div className="space-y-5">
-      <div className="relative">
-        <MapPin
-          className="text-muted-foreground pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2"
-          aria-hidden
-        />
-        <input
-          type="text"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="наприклад, Київ"
-          autoComplete="address-level2"
-          className="bg-card border-border focus-visible:border-primary focus-visible:ring-primary/20 placeholder:text-muted-foreground h-13 w-full rounded-xl border px-11 text-base focus-visible:outline-none focus-visible:ring-2"
-          style={{ touchAction: "manipulation", height: "52px" }}
-          aria-label="Місто"
-        />
-        {value ? (
-          <button
-            type="button"
-            onClick={() => onChange("")}
-            className="text-muted-foreground hover:bg-muted absolute right-2 top-1/2 inline-flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full"
-            aria-label="Очистити"
-            style={{ touchAction: "manipulation" }}
-          >
-            <X className="h-4 w-4" aria-hidden />
-          </button>
-        ) : null}
-      </div>
-
-      <div className="space-y-2.5">
-        <p className="text-muted-foreground text-xs font-semibold uppercase tracking-widest">
-          Найближчі
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {NEAREST_CITIES.map((c) => {
-            const active = value === c;
-            return (
-              <button
-                key={c}
-                type="button"
-                onClick={() => onChange(c)}
-                className={cn(
-                  "inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm transition",
-                  active
-                    ? "border-primary bg-accent text-primary"
-                    : "border-border bg-card text-foreground hover:border-primary/40",
-                )}
-                style={{ touchAction: "manipulation" }}
-                aria-pressed={active}
-              >
-                <MapPin className="h-3.5 w-3.5" aria-hidden />
-                {c}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={onDetect}
-        disabled={locating}
-        className="text-primary hover:bg-accent/40 inline-flex items-center gap-2 rounded-md px-2 py-2 text-sm font-medium underline-offset-2 hover:underline disabled:opacity-60"
-        style={{ touchAction: "manipulation" }}
-      >
-        <LocateFixed className={cn("h-4 w-4", locating && "animate-pulse")} aria-hidden />
-        {locating ? "Шукаю…" : "Визначити автоматично"}
-      </button>
-      <LocateError error={locateError} onOpenSettings={onOpenSettings} />
-    </div>
-  );
-}
-
-function LocateError({
-  error,
-  onOpenSettings,
-}: {
-  error: string | null;
-  onOpenSettings: () => void;
-}) {
-  if (!error) return null;
-  if (error === "denied:tg") {
-    return (
-      <div className="text-destructive space-y-1 text-xs">
-        <p>Telegram заблокував доступ до геолокації для цього додатка.</p>
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="text-primary inline-flex items-center underline-offset-2 hover:underline"
-        >
-          Відкрити налаштування
-        </button>
-      </div>
-    );
-  }
-  if (error === "denied:browser") {
-    return (
-      <div className="text-destructive space-y-1 text-xs">
-        <p>Браузер заблокував геолокацію.</p>
-        <p className="text-muted-foreground">
-          Дозволь у налаштуваннях сайту або введи місто вручну.
-        </p>
-      </div>
-    );
-  }
-  if (error === "fail") {
-    return <p className="text-destructive text-xs">Не вдалось визначити. Введи вручну.</p>;
-  }
-  return <p className="text-destructive text-xs">{error}</p>;
-}
-
-// ----------------------------------------------------------------
-// Step 2 — Display name + privacy toggle
-// ----------------------------------------------------------------
-
-function NameStep({
-  displayName,
-  onDisplayName,
-  showPublicly,
-  onShowPublicly,
-}: {
-  displayName: string;
-  onDisplayName: (v: string) => void;
-  showPublicly: boolean;
-  onShowPublicly: (v: boolean) => void;
-}) {
-  const trimmed = displayName.trim();
-  const hasName = trimmed.length > 0;
-  // Public visibility requires *both* a name *and* the toggle on. Toggling
-  // anonymous flips the bit; toggling visible needs a non-empty name.
-  const mode: "anon" | "public" = hasName && showPublicly ? "public" : "anon";
-
-  return (
-    <div className="space-y-5">
-      <div className="space-y-2">
-        <Label htmlFor="dn">Ім'я</Label>
-        <Input
-          id="dn"
-          value={displayName}
-          onChange={(e) => onDisplayName(e.target.value)}
-          placeholder="наприклад, Дмитро"
-          maxLength={120}
-          autoComplete="given-name"
-        />
-      </div>
-
-      <div className="space-y-2">
-        <Label>Як показувати в подіях</Label>
-        <div className="grid grid-cols-2 gap-2">
-          <ModeChip
-            active={mode === "anon"}
-            onClick={() => onShowPublicly(false)}
-            title="Анонімно"
-            subtitle="Видно тільки кількість"
-          />
-          <ModeChip
-            active={mode === "public"}
-            disabled={!hasName}
-            onClick={() => onShowPublicly(true)}
-            title={`Показувати «${trimmed || "ім'я"}»`}
-            subtitle={
-              hasName ? "Імʼя серед тих, хто йде" : "Спершу введи ім'я вище"
-            }
-          />
-        </div>
-        <p className="text-muted-foreground text-xs">
-          Можна змінити окремо для кожної події.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function ModeChip({
-  active,
-  disabled,
-  onClick,
-  title,
-  subtitle,
-}: {
-  active: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  title: string;
-  subtitle: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      style={{ touchAction: "manipulation" }}
-      className={cn(
-        "flex h-auto min-h-[72px] flex-col items-start justify-center gap-1 rounded-xl border-2 px-3 py-2.5 text-left transition",
-        active
-          ? "border-primary bg-primary text-primary-foreground"
-          : "border-border bg-card text-foreground hover:border-primary/40",
-        disabled && "cursor-not-allowed opacity-50",
-      )}
-    >
-      <span className="text-sm font-semibold leading-tight">{title}</span>
-      <span
-        className={cn(
-          "text-xs leading-tight",
-          active ? "text-primary-foreground/85" : "text-muted-foreground",
-        )}
-      >
-        {subtitle}
-      </span>
-    </button>
-  );
-}
-
-// ----------------------------------------------------------------
-// Step 4 — Schedule
-// ----------------------------------------------------------------
-
-function ScheduleStep({
-  availability,
-  onAvailability,
-  constraints,
-  onConstraints,
-}: {
-  availability: string[];
-  onAvailability: (v: string[]) => void;
-  constraints: string;
-  onConstraints: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <ChipMultiSelect
-        options={AVAILABILITY_OPTIONS}
-        value={availability}
-        onChange={onAvailability}
-        size="md"
-      />
-      <div className="space-y-2">
-        <Label htmlFor="constraints">Що з графіку важливо врахувати?</Label>
-        <textarea
-          id="constraints"
-          value={constraints}
-          maxLength={500}
-          onChange={(e) => onConstraints(e.target.value)}
-          rows={3}
-          placeholder="наприклад, «маленька дитина — не цілий день»"
-          className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[88px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
-        />
-      </div>
-    </div>
-  );
-}
-
-// ----------------------------------------------------------------
-// Step 5 — Comfort: company / accessibility / triggers
-// ----------------------------------------------------------------
-
-function ComfortStep({
-  companyPreference,
-  onCompanyPreference,
-  accessibility,
-  onAccessibility,
-  triggers,
-  onTriggers,
-}: {
-  companyPreference: CompanyPreference;
-  onCompanyPreference: (v: CompanyPreference) => void;
-  accessibility: AccessibilityFlag[];
-  onAccessibility: (v: AccessibilityFlag[]) => void;
-  triggers: string[];
-  onTriggers: (v: string[]) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <SubSection title="В якій компанії бути?">
-        <ChipSingleSelect
-          options={COMPANY_PREFERENCE_OPTIONS}
-          value={companyPreference}
-          onChange={(v) => v && onCompanyPreference(v)}
-        />
-      </SubSection>
-      <SubSection title="Доступність">
-        <ChipMultiSelect options={ACCESSIBILITY_OPTIONS} value={accessibility} onChange={onAccessibility} />
-      </SubSection>
-      <SubSection title="Тригери, яких уникати">
-        <ChipMultiSelect options={TRIGGER_OPTIONS} value={triggers} onChange={onTriggers} />
-      </SubSection>
-    </div>
-  );
-}
-
-// ----------------------------------------------------------------
-// Step 6 — About: status / age / role / bio
-// ----------------------------------------------------------------
-
-function AboutStep({
-  veteranStatus,
-  onVeteranStatus,
-  ageRange,
-  onAgeRange,
-  role,
-  onRole,
-  bio,
-  onBio,
-}: {
-  veteranStatus: VeteranStatus | null;
-  onVeteranStatus: (v: VeteranStatus | null) => void;
-  ageRange: AgeRange | null;
-  onAgeRange: (v: AgeRange | null) => void;
-  role: string;
-  onRole: (v: string) => void;
-  bio: string;
-  onBio: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-5">
-      <SubSection title="Статус">
-        <ChipSingleSelect
-          options={VETERAN_STATUS_OPTIONS}
-          value={veteranStatus}
-          onChange={onVeteranStatus}
-          allowDeselect
-        />
-      </SubSection>
-      <SubSection title="Вік">
-        <ChipSingleSelect
-          options={AGE_RANGE_OPTIONS}
-          value={ageRange}
-          onChange={onAgeRange}
-          allowDeselect
-        />
-      </SubSection>
-      <SubSection title="Що приносиш у збір?">
-        <ChipSingleSelect
-          options={ROLE_IN_GROUP_OPTIONS}
-          value={role || null}
-          onChange={(v) => onRole(v ?? "")}
-          allowDeselect
-        />
-      </SubSection>
-      <SubSection title="Про себе">
-        <textarea
-          value={bio}
-          maxLength={500}
-          onChange={(e) => onBio(e.target.value)}
-          rows={4}
-          placeholder="у вільній формі — кілька речень, які ти хотів би, щоб про тебе знали"
-          className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[100px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
-        />
-        <p className="text-muted-foreground text-right text-xs">{bio.length}/500</p>
-      </SubSection>
-    </div>
-  );
-}
-
-// ----------------------------------------------------------------
-// Reusable bits
-// ----------------------------------------------------------------
-
-function SubSection({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-2">
-      <Label>{title}</Label>
-      {children}
-    </div>
-  );
-}
-
-function ChipMultiSelect<T extends string>({
-  options,
-  value,
-  onChange,
-  emptyHint,
-  size = "sm",
-}: {
-  options: Option<T>[];
-  value: T[];
-  onChange: (v: T[]) => void;
-  emptyHint?: string;
-  size?: "sm" | "md";
-}) {
-  const set = useMemo(() => new Set(value), [value]);
-  const baseClass =
-    size === "md"
-      ? "inline-flex h-11 items-center rounded-full border-2 px-5 text-sm font-medium transition"
-      : "inline-flex h-9 items-center rounded-full border px-3 text-sm transition";
-
-  return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {options.map((opt) => {
-          const active = set.has(opt.value);
-          return (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => {
-                const next = new Set(set);
-                if (active) next.delete(opt.value);
-                else next.add(opt.value);
-                onChange([...next]);
-              }}
-              className={cn(
-                baseClass,
-                active
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-card text-foreground hover:border-primary/40",
-              )}
-              style={{ touchAction: "manipulation" }}
-              aria-pressed={active}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
-      {emptyHint && value.length === 0 ? (
-        <p className="text-muted-foreground text-xs">{emptyHint}</p>
-      ) : null}
-    </div>
-  );
-}
-
-function ChipSingleSelect<T extends string>({
-  options,
-  value,
-  onChange,
-  allowDeselect = false,
-}: {
-  options: Option<T>[];
-  value: T | null;
-  onChange: (v: T | null) => void;
-  allowDeselect?: boolean;
-}) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {options.map((opt) => {
-        const active = value === opt.value;
-        return (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(active && allowDeselect ? null : opt.value)}
-            className={cn(
-              "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
-              active
-                ? "border-primary bg-primary text-primary-foreground"
-                : "border-border bg-card text-foreground hover:border-primary/40",
-            )}
-            style={{ touchAction: "manipulation" }}
-            aria-pressed={active}
-          >
-            {opt.label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
