@@ -220,7 +220,7 @@ export function ClientEventPage({ id }: { id: string }) {
       ) : null}
 
       {event.organizer_contact ? (
-        <section className="space-y-1 px-4 pb-4">
+        <section className="space-y-2 px-4 pb-8 pt-2">
           <h2 className="text-foreground text-lg font-semibold">Організатор</h2>
           <OrganizerLine raw={event.organizer_contact} />
         </section>
