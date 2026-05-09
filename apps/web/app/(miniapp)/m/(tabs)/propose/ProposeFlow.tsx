@@ -478,8 +478,11 @@ export function ProposeFlow() {
               onValueChange={(v) => {
                 if (!v || v !== ENABLED_CITY) return;
                 setForm((f) =>
-                  f.city === v ? f : { ...f, city: v, pin: null },
+                  f.city === v ? f : { ...f, city: v, pin: null, address: "" },
                 );
+                // Auto-filled address belonged to the old city; let the
+                // next pin trigger a fresh geocode.
+                addressTouchedRef.current = false;
                 clearErrorIfMatches("city");
                 setLocateError(null);
               }}
