@@ -15,6 +15,7 @@ export * from "./types";
 export * from "./client";
 export * from "./auth";
 export * from "./feed";
+export * from "./feed-cache";
 export * from "./users";
 export * from "./invitations";
 export * from "./opportunities";

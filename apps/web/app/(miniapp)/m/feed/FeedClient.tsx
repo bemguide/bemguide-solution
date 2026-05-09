@@ -1,12 +1,25 @@
-// Client-side feed loader. Talks to the v2 backend via @/lib/api.
-// `getFeed` requires the session token that TgInit has already exchanged
-// (or will be in the process of exchanging — we retry once on 401).
+// /m/feed — miniapp home. Stale-while-revalidate against the v2
+// backend so the page paints instantly on return visits and never
+// leaves the user staring at a full-page skeleton:
+//
+//   1. On mount, read the localStorage cache and seed state from it.
+//      First paint is the previous successful feed (or the empty
+//      state / skeleton if no cache).
+//   2. Fire `getCurrentUser()` and `getFeed()` in parallel (the
+//      backend defaults to the user's stored city when ?city is
+//      omitted, so /feed doesn't need to wait on /me).
+//   3. When fresh data arrives, swap state and write the cache. On
+//      failure, keep the stale data — only swap to an error UI when
+//      we have nothing at all.
+//
+// Empty backend → instant empty-state once data arrives (no spinner
+// detour). Telegram-not-loaded → "Open in Telegram" CTA.
 
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Plus, ChevronRight, Sparkles } from "lucide-react";
+import { Plus, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
@@ -17,6 +30,8 @@ import {
   isNoTelegramEnv,
   logApiError,
   opportunityToDisplay,
+  readFeedCache,
+  writeFeedCache,
   type FeedSections as V2FeedSections,
 } from "@/lib/api";
 import type { EventForDisplay } from "@/lib/types";
@@ -36,11 +51,16 @@ function adapt(sections: V2FeedSections): DisplaySections {
 }
 
 export function FeedClient() {
-  const [loading, setLoading] = useState(true);
-  const [city, setCity] = useState<string | undefined>();
-  const [sections, setSections] = useState<DisplaySections | null>(null);
+  // Hydrate from cache so first paint already has content (when
+  // anything is cached) — typical return-visit case.
+  const cached = useMemo(() => readFeedCache(), []);
+
+  const [sections, setSections] = useState<DisplaySections | null>(
+    cached ? adapt(cached.sections) : null,
+  );
+  const [city, setCity] = useState<string | undefined>(cached?.city);
   const [error, setError] = useState<string | null>(null);
-  // Avoid double-fetch in React strict mode (dev) and StrictMode unmount/remount.
+  const [refreshing, setRefreshing] = useState(true);
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -48,51 +68,70 @@ export function FeedClient() {
     ranRef.current = true;
 
     let cancelled = false;
+    const startedAt = performance.now();
+
     async function load() {
       try {
-        // apiFetch auto-exchanges initData when the token is missing,
-        // self-heals a single 401, and back-offs after auth failure.
-        const me = await getCurrentUser().catch(() => null);
+        // Parallel: /feed defaults to the user's stored city when no
+        // ?city is passed, so it doesn't need /me to resolve first.
+        const [me, v2] = await Promise.all([
+          getCurrentUser().catch(() => null),
+          getFeed(),
+        ]);
         if (cancelled) return;
-        const myCity = me?.city ?? undefined;
-        const v2 = await getFeed({ city: myCity });
-        if (cancelled) return;
-        setCity(myCity);
-        setSections(adapt(v2));
-        setLoading(false);
+
+        const myCity = me?.city ?? cached?.city;
+        const fresh = adapt(v2);
+        setCity(myCity ?? undefined);
+        setSections(fresh);
+        setError(null);
+        writeFeedCache({ sections: v2, city: myCity ?? undefined });
+
+        if (process.env.NODE_ENV !== "production") {
+          const total =
+            v2.today_tomorrow.length + v2.this_week.length + v2.try_new.length;
+          const ms = Math.round(performance.now() - startedAt);
+          console.debug(
+            `[feed] backend returned ${total} items in ${ms}ms (city=${myCity ?? "—"})`,
+          );
+        }
       } catch (e) {
         if (cancelled) return;
         logApiError("feed", e);
-        if (isNoTelegramEnv(e)) {
-          setError("no_telegram_environment");
-        } else {
-          setError(describeError(e, "feed"));
+        // Only surface an error if we have *nothing* to show. With
+        // cached data we keep the stale view and stay quiet.
+        if (!sections) {
+          if (isNoTelegramEnv(e)) setError("no_telegram_environment");
+          else setError(describeError(e, "feed"));
         }
-        setLoading(false);
+      } finally {
+        if (!cancelled) setRefreshing(false);
       }
     }
     void load();
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (loading) {
-    return <FeedSkeleton />;
+  // The "Open in Telegram" CTA is its own dedicated screen — don't
+  // bury it under a generic error.
+  if (!sections && error === "no_telegram_environment") {
+    return <OpenInTelegramScreen />;
   }
 
-  if (error || !sections) {
-    // The "open in Telegram" path has its own dedicated UI so we don't
-    // bury it under a generic error.
-    if (error === "no_telegram_environment") {
-      return <OpenInTelegramScreen />;
-    }
+  // Hard fail: no cache *and* fetch failed → show the inline error
+  // with a retry link. (The caller can always pull-to-refresh by
+  // re-opening the Mini App.)
+  if (!sections && error) {
     return (
-      <main className="px-4 py-6">
+      <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-24 pt-4">
+        <FeedHeader city={city} refreshing={false} />
         <EmptyState
           icon={<Sparkles className="h-10 w-10" aria-hidden />}
           title="Не вдалось завантажити стрічку"
-          body={error ?? undefined}
+          body={error}
           action={
             <Link
               href="/m/feed"
@@ -106,6 +145,17 @@ export function FeedClient() {
     );
   }
 
+  // Initial cold load with no cache yet — show a tight skeleton so
+  // there's something on screen within one frame.
+  if (!sections) {
+    return (
+      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-24 pt-4">
+        <FeedHeader city={city} refreshing />
+        <FeedSkeleton />
+      </main>
+    );
+  }
+
   const empty =
     sections.today_tomorrow.length === 0 &&
     sections.this_week.length === 0 &&
@@ -113,16 +163,7 @@ export function FeedClient() {
 
   return (
     <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-24 pt-4">
-      <header className="flex items-center justify-between">
-        <h1 className="text-foreground text-xl font-semibold">Поруч{city ? ` · ${city}` : ""}</h1>
-        <Link
-          href="/m/me"
-          className="bg-secondary text-secondary-foreground inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
-          aria-label="Профіль"
-        >
-          {city?.[0] ?? "Я"}
-        </Link>
-      </header>
+      <FeedHeader city={city} refreshing={refreshing} />
 
       {empty ? (
         <EmptyState
@@ -196,6 +237,32 @@ export function FeedClient() {
   );
 }
 
+function FeedHeader({
+  city,
+  refreshing,
+}: {
+  city?: string;
+  refreshing: boolean;
+}) {
+  return (
+    <header className="flex items-center justify-between">
+      <h1 className="text-foreground inline-flex items-center gap-2 text-xl font-semibold">
+        Поруч{city ? ` · ${city}` : ""}
+        {refreshing ? (
+          <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
+        ) : null}
+      </h1>
+      <Link
+        href="/m/me"
+        className="bg-secondary text-secondary-foreground inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
+        aria-label="Профіль"
+      >
+        {city?.[0] ?? "Я"}
+      </Link>
+    </header>
+  );
+}
+
 function OpenInTelegramScreen() {
   const botUsername = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? "";
   const deepLink = botUsername ? `https://t.me/${botUsername}?startapp=feed` : null;
@@ -223,17 +290,14 @@ function OpenInTelegramScreen() {
 
 function FeedSkeleton() {
   return (
-    <main className="flex flex-1 flex-col gap-4 px-4 pt-4">
-      <div className="bg-muted h-6 w-32 animate-pulse rounded" />
-      <div className="space-y-3">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="space-y-2">
-            <div className="bg-muted aspect-[16/9] w-full animate-pulse rounded-xl" />
-            <div className="bg-muted h-4 w-3/4 animate-pulse rounded" />
-            <div className="bg-muted h-3 w-1/2 animate-pulse rounded" />
-          </div>
-        ))}
-      </div>
-    </main>
+    <div className="space-y-3">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="space-y-2">
+          <div className="bg-muted aspect-[16/9] w-full animate-pulse rounded-xl" />
+          <div className="bg-muted h-4 w-3/4 animate-pulse rounded" />
+          <div className="bg-muted h-3 w-1/2 animate-pulse rounded" />
+        </div>
+      ))}
+    </div>
   );
 }
