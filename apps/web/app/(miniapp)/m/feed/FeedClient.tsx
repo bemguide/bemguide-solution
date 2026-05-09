@@ -11,10 +11,10 @@ import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCa
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import {
-  ApiError,
+  describeError,
   getCurrentUser,
   getFeed,
-  isTelegramEnvironment,
+  isNoTelegramEnv,
   opportunityToDisplay,
   type FeedSections as V2FeedSections,
 } from "@/lib/api";
@@ -49,9 +49,8 @@ export function FeedClient() {
     let cancelled = false;
     async function load() {
       try {
-        // apiFetch auto-exchanges initData when the token is missing
-        // and self-heals a single 401, so pages no longer need to do
-        // the dance manually.
+        // apiFetch auto-exchanges initData when the token is missing,
+        // self-heals a single 401, and back-offs after auth failure.
         const me = await getCurrentUser().catch(() => null);
         if (cancelled) return;
         const myCity = me?.city ?? undefined;
@@ -62,7 +61,11 @@ export function FeedClient() {
         setLoading(false);
       } catch (e) {
         if (cancelled) return;
-        setError(friendlyError(e));
+        if (isNoTelegramEnv(e)) {
+          setError("no_telegram_environment");
+        } else {
+          setError(describeError(e, "feed"));
+        }
         setLoading(false);
       }
     }
@@ -189,26 +192,6 @@ export function FeedClient() {
       </Link>
     </main>
   );
-}
-
-function friendlyError(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.message === "no_telegram_environment") return "no_telegram_environment";
-    if (e.message === "NEXT_PUBLIC_API_BASE is not set") {
-      return "Бекенд ще не підключений. Перевір NEXT_PUBLIC_API_BASE.";
-    }
-    if (e.status === 0) return "Не вдалось дістатися сервера.";
-    if (e.status === 401) {
-      // After ensureAuth + 401 retry both failed — likely a bad bot
-      // token / clock drift. Telling the user to reopen Telegram is
-      // the only useful action we can offer.
-      return isTelegramEnvironment()
-        ? "Сесія завершилась. Закрий і відкрий додаток ще раз."
-        : "no_telegram_environment";
-    }
-    if (e.status >= 500) return "Сервер тимчасово не відповідає. Спробуй за хвилину.";
-  }
-  return e instanceof Error ? e.message : "Щось пішло не так. Спробуй ще раз.";
 }
 
 function OpenInTelegramScreen() {

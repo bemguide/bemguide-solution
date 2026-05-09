@@ -20,3 +20,4 @@ export * from "./invitations";
 export * from "./opportunities";
 export * from "./me";
 export * from "./display";
+export * from "./messages";

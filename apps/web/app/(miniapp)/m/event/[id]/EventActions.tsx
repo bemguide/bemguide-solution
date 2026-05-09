@@ -17,7 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { getTgUser } from "@/lib/telegram/client";
 import { formatEventDateTime } from "@/lib/format";
 import {
-  ApiError,
+  describeError,
   getRoom,
   rsvp,
   setShowNamePublicly,
@@ -76,7 +76,9 @@ export function EventActions({
         startRoomPoll();
       }
     } catch (e) {
-      setError(rsvpErrorToMessage(e));
+      const msg = rsvpErrorToMessage(e);
+      console.warn("[rsvp] failed:", msg, e);
+      setError(msg);
     } finally {
       setBusy(false);
     }
@@ -298,13 +300,5 @@ export function EventActions({
 }
 
 function rsvpErrorToMessage(e: unknown): string {
-  if (e instanceof ApiError) {
-    if (e.message === "no_telegram_environment")
-      return "Відкрий додаток у Telegram, щоб записатися.";
-    if (e.message === "event_started") return "Подія вже почалася.";
-    if (e.message === "already_rsvped") return "Ти вже відповів на цю подію.";
-    if (e.status === 401) return "Сесія завершилась — закрий і відкрий додаток.";
-    if (e.status >= 500) return "Сервер тимчасово не відповідає. Спробуй ще раз.";
-  }
-  return "Не вдалось записати. Спробуй ще раз.";
+  return describeError(e, "rsvp");
 }

@@ -117,6 +117,15 @@ export function isTelegramEnvironment(): boolean {
 
 const AUTH_PATH = "/auth/telegram";
 
+/**
+ * Cool-down window after a failed `/auth/telegram` round-trip. Prevents
+ * page-driven onboarding (3 sequential PATCHes) from re-hitting a known-
+ * broken backend three times in a row. The first failure is surfaced
+ * to the user; everything inside the window throws the cached error
+ * without touching the network.
+ */
+const AUTH_FAILURE_COOLDOWN_MS = 5000;
+
 async function rawAuthExchange(initData: string): Promise<AuthExchangeResponse> {
   if (!API_BASE) {
     throw new ApiError(0, "NEXT_PUBLIC_API_BASE is not set");
@@ -147,64 +156,87 @@ async function rawAuthExchange(initData: string): Promise<AuthExchangeResponse> 
   return parsed as AuthExchangeResponse;
 }
 
-/**
- * Trade Telegram initData for a session token. Idempotent: if a
- * non-expired token is already in localStorage it short-circuits.
- *
- * Returns null when there is no initData on the WebApp (i.e. running
- * in a plain browser) — callers can detect this with
- * `isTelegramEnvironment()` before deciding what UI to render.
- */
-export async function exchangeInitData(
-  initDataOverride?: string,
-): Promise<AuthExchangeResponse | null> {
-  const initData = initDataOverride ?? readInitData();
-  if (!initData) return null;
-  if (getToken() && !isSessionExpired()) return null;
-  const res = await rawAuthExchange(initData);
-  setSession(res);
-  return res;
-}
-
-export function logout(): void {
-  clearSession();
-}
-
 // ---------------------------------------------------------------
 // Single-flight auth gate
 // ---------------------------------------------------------------
 
 /**
- * Promise of the in-flight auth exchange, if any. Concurrent
- * `ensureAuth` calls fan in to a single network round-trip.
+ * Promise of the in-flight auth exchange, if any. Concurrent calls
+ * (TgInit + page mount) fan in to a single network round-trip.
  */
-let authInFlight: Promise<void> | null = null;
+let authInFlight: Promise<AuthExchangeResponse | null> | null = null;
+
+/** Last failure timestamp + the original error, for the cooldown gate. */
+let lastAuthFailure: { at: number; error: ApiError } | null = null;
 
 /**
- * Ensure a usable token is in localStorage before the next request.
- * Throws `ApiError(0, "no_telegram_environment")` if there's no
- * initData (i.e. running outside a Telegram WebApp). Pages call this
- * indirectly via authed `apiFetch`.
+ * Single source of truth for `/auth/telegram`. Both `exchangeInitData`
+ * (from TgInit) and `ensureAuth` (from `apiFetch` for authed routes)
+ * route through this — so we get exactly one round-trip per page load
+ * even when the SDK boot races with the first `getCurrentUser`.
+ *
+ * Throws `ApiError(0, "no_telegram_environment")` when there's no
+ * initData on the WebApp (i.e. running outside Telegram).
  */
-export async function ensureAuth(): Promise<void> {
-  if (getToken() && !isSessionExpired()) return;
-  if (authInFlight) {
-    await authInFlight;
-    return;
+async function performExchange(): Promise<AuthExchangeResponse | null> {
+  if (getToken() && !isSessionExpired()) return null;
+  if (authInFlight) return authInFlight;
+  if (lastAuthFailure && Date.now() - lastAuthFailure.at < AUTH_FAILURE_COOLDOWN_MS) {
+    throw lastAuthFailure.error;
   }
   authInFlight = (async () => {
-    const initData = readInitData();
-    if (!initData) {
-      throw new ApiError(0, "no_telegram_environment");
+    try {
+      const initData = readInitData();
+      if (!initData) {
+        throw new ApiError(0, "no_telegram_environment");
+      }
+      const res = await rawAuthExchange(initData);
+      setSession(res);
+      lastAuthFailure = null;
+      return res;
+    } catch (e) {
+      if (e instanceof ApiError) lastAuthFailure = { at: Date.now(), error: e };
+      throw e;
     }
-    const res = await rawAuthExchange(initData);
-    setSession(res);
   })();
   try {
-    await authInFlight;
+    return await authInFlight;
   } finally {
     authInFlight = null;
   }
+}
+
+/**
+ * Trade Telegram initData for a session token. Idempotent: if a
+ * non-expired token is already in localStorage it short-circuits.
+ * Single-flight + 5s cool-down on failure are shared with the
+ * implicit `ensureAuth()` path used by `apiFetch`.
+ *
+ * Returns null when there's no initData on the WebApp — callers can
+ * detect this with `isTelegramEnvironment()`.
+ *
+ * @param initData accepted for compat with the (future) login-widget
+ *   fallback path. For now the canonical source is
+ *   `window.Telegram.WebApp.initData` and a passed value is ignored.
+ */
+export async function exchangeInitData(
+  initData?: string,
+): Promise<AuthExchangeResponse | null> {
+  void initData;
+  return performExchange();
+}
+
+export function logout(): void {
+  clearSession();
+  lastAuthFailure = null;
+}
+
+/**
+ * Used by `apiFetch` before every authed request. Same engine as
+ * `exchangeInitData` — see `performExchange` for the contract.
+ */
+export async function ensureAuth(): Promise<void> {
+  await performExchange();
 }
 
 // ---------------------------------------------------------------

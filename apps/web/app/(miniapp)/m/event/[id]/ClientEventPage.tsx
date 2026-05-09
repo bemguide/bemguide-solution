@@ -12,7 +12,7 @@ import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
 import {
-  ApiError,
+  describeError,
   getOpportunity,
   getOpportunityAttendees,
   type AttendeeSummary,
@@ -42,15 +42,7 @@ export function ClientEventPage({ id }: { id: string }) {
         setState({ kind: "ready", event, attendees });
       } catch (e) {
         if (cancelled) return;
-        setState({
-          kind: "error",
-          message:
-            e instanceof ApiError && e.status === 404
-              ? "Цю подію не знайдено."
-              : e instanceof Error
-                ? e.message
-                : "Не вдалось завантажити подію.",
-        });
+        setState({ kind: "error", message: describeError(e) });
       }
     }
     void load();
