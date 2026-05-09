@@ -20,7 +20,6 @@ import {
   getUpcoming,
   isNoTelegramEnv,
   logApiError,
-  logout,
   readMeCache,
   writeMeCache,
   type UpcomingItem,
@@ -28,7 +27,6 @@ import {
 } from "@/lib/api";
 import { getTgUserWithWait } from "@/lib/telegram/client";
 import { formatEventDateTime } from "@/lib/format";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 
@@ -89,7 +87,7 @@ export function MeClient() {
   if (!me && !error) {
     return (
       <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-6">
-        <div className="bg-card border-border h-32 w-full animate-pulse rounded-2xl border" />
+        <div className="bg-card border-border h-32 w-full animate-pulse rounded-xl border" />
         <div className="bg-muted h-4 w-32 animate-pulse rounded" />
         <div className="space-y-2">
           <div className="bg-card border-border h-16 w-full animate-pulse rounded-xl border" />
@@ -161,17 +159,6 @@ export function MeClient() {
         )}
       </section>
 
-      <Button
-        type="button"
-        variant="outline"
-        className="mt-auto"
-        onClick={() => {
-          logout();
-          if (typeof window !== "undefined") window.location.reload();
-        }}
-      >
-        Завершити сесію
-      </Button>
     </main>
   );
 }
@@ -188,7 +175,7 @@ function ProfileCard({
   showNamePublicly: boolean;
 }) {
   return (
-    <section className="bg-card border-border flex flex-col items-center gap-3 rounded-2xl border px-5 py-6 text-center">
+    <section className="bg-card border-border flex flex-col items-center gap-3 rounded-xl border px-5 py-6 text-center">
       <Avatar photoUrl={photoUrl} displayName={displayName} />
       <div className="space-y-0.5">
         <p className="text-foreground text-lg font-semibold leading-tight">{displayName}</p>
