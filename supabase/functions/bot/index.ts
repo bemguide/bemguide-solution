@@ -42,10 +42,9 @@ bot.command("start", async (ctx) => {
       .webApp("Відкрити подію", `${APP_URL}/m/event/${encodeURIComponent(slug)}`)
       .row()
       .text("Не зараз — нагадай через тиждень", `defer:${slug}`);
-    return ctx.reply(
-      "Подивися подію — або відклади, я нагадаю через тиждень.",
-      { reply_markup: keyboard },
-    );
+    return ctx.reply("Подивися подію — або відклади, я нагадаю через тиждень.", {
+      reply_markup: keyboard,
+    });
   }
 
   if (param.startsWith("defer_")) {
@@ -55,10 +54,7 @@ bot.command("start", async (ctx) => {
   }
 
   if (param === "org") {
-    const keyboard = new InlineKeyboard().webApp(
-      "Створити подію",
-      `${APP_URL}/org/new-event`,
-    );
+    const keyboard = new InlineKeyboard().webApp("Створити подію", `${APP_URL}/org/new-event`);
     return ctx.reply(
       "Привіт. Якщо ви організовуєте подію для ветеранів — натисніть кнопку нижче.",
       { reply_markup: keyboard },
@@ -125,9 +121,7 @@ bot.command("me", async (ctx) => {
   type Row = { status: string; events: { title: string; start_at: string; slug: string } | null };
   const lines: string[] = [];
   lines.push(`${veteran.display_name ?? "Привіт"} — місто: ${veteran.city ?? "не вказано"}`);
-  lines.push(
-    veteran.reminders_enabled ? "Нагадування: увімкнено" : "Нагадування: вимкнено",
-  );
+  lines.push(veteran.reminders_enabled ? "Нагадування: увімкнено" : "Нагадування: вимкнено");
   lines.push("");
   if (!rsvps?.length) {
     lines.push("Поки що нікуди не записаний. Подивись що поруч:");
@@ -142,7 +136,9 @@ bot.command("me", async (ctx) => {
         hour: "2-digit",
         minute: "2-digit",
       });
-      lines.push(`• «${r.events.title}» — ${when}${r.status === "deferred" ? " (відкладено)" : ""}`);
+      lines.push(
+        `• «${r.events.title}» — ${when}${r.status === "deferred" ? " (відкладено)" : ""}`,
+      );
     }
   }
 
@@ -210,10 +206,7 @@ bot.command("feedback", (ctx) =>
 
 // /newevent — full flow lands in M12. For now, route to miniapp.
 bot.command("newevent", (ctx) => {
-  const keyboard = new InlineKeyboard().webApp(
-    "Відкрити форму",
-    `${APP_URL}/m/propose`,
-  );
+  const keyboard = new InlineKeyboard().webApp("Відкрити форму", `${APP_URL}/m/propose`);
   return ctx.reply("Відкрий форму, опишеш подію — модератор перевірить за добу.", {
     reply_markup: keyboard,
   });
