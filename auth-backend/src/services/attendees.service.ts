@@ -1,4 +1,4 @@
-import { supabaseAdmin, supabaseAsUser } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import type { Database } from '../types/supabase.generated.js';
 
@@ -15,15 +15,16 @@ const ALLOWED_TRANSITIONS: Record<AttendeeStatus, AttendeeStatus[]> = {
 // User-driven status update. Currently only meaningful for `left` (user pulled
 // out). `attended` / `no_show` are typically organizer-set; the route allows
 // them via the same endpoint for now and we can split later if needed.
+//
+// Service-role read + write — replaces the user-token + RLS path (HS256 session
+// JWTs aren't PostgREST-verifiable). The explicit (event_id, user_id) filter
+// scopes the read to the caller's row, same as the prior RLS contract.
 export async function updateStatus(
-  accessToken: string,
   userId: string,
   eventId: string,
   next: AttendeeStatus,
 ): Promise<AttendeeRow> {
-  const client = supabaseAsUser(accessToken);
-
-  const { data: current, error: readErr } = await client
+  const { data: current, error: readErr } = await supabaseAdmin
     .from('event_attendees')
     .select('*')
     .eq('event_id', eventId)

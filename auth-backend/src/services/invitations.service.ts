@@ -1,4 +1,4 @@
-import { supabaseAdmin, supabaseAsUser } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import { clampLimit, decodeCursor, encodeCursor } from '../utils/cursor.js';
 import type { Database } from '../types/supabase.generated.js';
@@ -16,18 +16,19 @@ export interface InvitationsPage {
   next_cursor: string | null;
 }
 
-// User-token client → RLS event_invitations_self_read.
-// Sort by created_at desc, id desc.
+// Service-role read with explicit user_id filter — replaces the user-token +
+// RLS event_invitations_self_read path (HS256 session JWTs aren't
+// PostgREST-verifiable). Sort by created_at desc, id desc.
 export async function listForUser(
-  accessToken: string,
+  userId: string,
   opts: { limit?: number; cursor?: string },
 ): Promise<InvitationsPage> {
   const limit = clampLimit(opts.limit);
-  const client = supabaseAsUser(accessToken);
 
-  let query = client
+  let query = supabaseAdmin
     .from('event_invitations')
     .select('*, opportunities(*)')
+    .eq('user_id', userId)
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
     .limit(limit + 1);
@@ -55,22 +56,23 @@ export async function listForUser(
   return { items, next_cursor };
 }
 
-// PATCH /me/invitations/:id — user-token client updates response + responded_at
-// (RLS event_invitations_self_update). On 'accepted' we also insert into
-// event_attendees via service role (RLS would block self-insert without an
-// explicit policy, and the trigger event_attendees_create_room runs either way).
+// PATCH /me/invitations/:id — service-role update with explicit user_id filter.
+// Replaces the user-token + RLS event_invitations_self_update path (HS256
+// session JWTs aren't PostgREST-verifiable). The .eq('user_id', userId) clause
+// ensures we only touch the caller's own invitation; if the row belongs to a
+// different user, the update returns no rows and we 404 — same effective
+// surface as RLS hiding it. On 'accepted' we also insert into event_attendees
+// via service role; the trigger event_attendees_create_room runs either way.
 export async function respond(
-  accessToken: string,
   userId: string,
   invitationId: string,
   response: 'accepted' | 'declined',
 ): Promise<{ invitation: InvitationRow; attended: boolean }> {
-  const client = supabaseAsUser(accessToken);
-
-  const { data: invitation, error: updateErr } = await client
+  const { data: invitation, error: updateErr } = await supabaseAdmin
     .from('event_invitations')
     .update({ response, responded_at: new Date().toISOString() })
     .eq('id', invitationId)
+    .eq('user_id', userId)
     .select('*')
     .maybeSingle();
 

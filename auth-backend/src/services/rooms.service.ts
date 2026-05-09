@@ -1,14 +1,25 @@
-import { supabaseAdmin, supabaseAsUser } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import type { Database } from '../types/supabase.generated.js';
 
 type RoomRow = Database['public']['Tables']['event_rooms']['Row'];
 
-// User-token client → RLS event_rooms_attendees_read.
-// Returns null if not an attendee (RLS hides the row).
-export async function getForEvent(accessToken: string, eventId: string): Promise<RoomRow | null> {
-  const client = supabaseAsUser(accessToken);
-  const { data, error } = await client
+// Service-role read with explicit attendee check. Replaces the old user-token
+// + RLS event_rooms_attendees_read path, since our HS256 session JWTs are not
+// PostgREST-verifiable (project signs with ES256). Returns null if the user
+// isn't an active attendee — same surface contract the route relies on to 403.
+export async function getForEvent(userId: string, eventId: string): Promise<RoomRow | null> {
+  const { data: attendee, error: attErr } = await supabaseAdmin
+    .from('event_attendees')
+    .select('user_id')
+    .eq('event_id', eventId)
+    .eq('user_id', userId)
+    .in('status', ['joining', 'attended'])
+    .maybeSingle();
+  if (attErr) throw AppError.upstream('Failed to verify attendance', attErr.message);
+  if (!attendee) return null;
+
+  const { data, error } = await supabaseAdmin
     .from('event_rooms')
     .select('*')
     .eq('event_id', eventId)

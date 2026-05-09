@@ -9,9 +9,9 @@ export async function meAttendanceRoute(app: FastifyInstance): Promise<void> {
     '/me/attendance/:eventId',
     { preHandler: authGuard },
     async (req) => {
-      if (!req.user || !req.accessToken) throw AppError.unauthenticated();
+      if (!req.user) throw AppError.unauthenticated();
       const { status } = parseOrThrow(updateAttendanceSchema, req.body, 'attendance');
-      const attendee = await updateStatus(req.accessToken, req.user.id, req.params.eventId, status);
+      const attendee = await updateStatus(req.user.id, req.params.eventId, status);
       return { attendee };
     },
   );

@@ -6,8 +6,8 @@ import { listForUser } from '../../services/matches.service.js';
 
 export async function meMatchesRoute(app: FastifyInstance): Promise<void> {
   app.get('/me/matches', { preHandler: authGuard }, async (req) => {
-    if (!req.user || !req.accessToken) throw AppError.unauthenticated();
+    if (!req.user) throw AppError.unauthenticated();
     const q = parseOrThrow(listQuerySchema, req.query, 'query');
-    return listForUser(req.accessToken, q);
+    return listForUser(req.user.id, q);
   });
 }

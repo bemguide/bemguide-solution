@@ -16,9 +16,9 @@ const querySchema = z.object({
 // /feed already covers the bucketed case.
 export async function matchesRoute(app: FastifyInstance): Promise<void> {
   app.get('/matches', { preHandler: authGuard }, async (req) => {
-    if (!req.accessToken) throw AppError.unauthenticated();
+    if (!req.user) throw AppError.unauthenticated();
     const q = parseOrThrow(querySchema, req.query, 'query');
-    const page = await listForUser(req.accessToken, q);
+    const page = await listForUser(req.user.id, q);
     return {
       items: page.items.map((m) => ({
         score: m.score,

@@ -1,4 +1,4 @@
-import { supabaseAsUser } from '../config/supabase.js';
+import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import { clampLimit, decodeCursor, encodeCursor } from '../utils/cursor.js';
 import type { Database } from '../types/supabase.generated.js';
@@ -22,19 +22,19 @@ interface ScoreCursor {
   event_id: string;
 }
 
-// User-token client → RLS event_matches_self_read restricts to auth.uid().
-// Workers should NEVER call this — they read via supabaseAdmin (service role).
-// Sort: score desc, event_id desc (deterministic tiebreak).
+// Service-role read with explicit user_id filter — replaces the user-token +
+// RLS event_matches_self_read path (HS256 session JWTs aren't
+// PostgREST-verifiable). Sort: score desc, event_id desc (deterministic tiebreak).
 export async function listForUser(
-  accessToken: string,
+  userId: string,
   opts: { limit?: number; cursor?: string },
 ): Promise<MatchesPage> {
   const limit = clampLimit(opts.limit);
-  const client = supabaseAsUser(accessToken);
 
-  let query = client
+  let query = supabaseAdmin
     .from('event_matches')
     .select('*, opportunities(*)')
+    .eq('user_id', userId)
     .order('score', { ascending: false })
     .order('event_id', { ascending: false })
     .limit(limit + 1);
