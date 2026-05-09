@@ -5,7 +5,7 @@
   "description": "Fastify + TypeScript auth backend backed by Supabase",
   "type": "module",
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
