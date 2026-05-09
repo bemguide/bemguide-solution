@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarClock, MapPin, Phone, Send } from "lucide-react";
+import { CalendarClock, MapPin, Phone, Send } from "lucide-react";
 import { formatEventDateTime, formatPrice } from "@/lib/format";
 import { AccessibilityStrip } from "@/components/poruch/AccessibilityStrip";
 import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
@@ -106,15 +106,6 @@ export function ClientEventPage({ id }: { id: string }) {
           className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
           aria-hidden
         />
-        <button
-          type="button"
-          onClick={onBack}
-          aria-label="До стрічки"
-          style={{ touchAction: "manipulation" }}
-          className="absolute left-3 top-3 z-10 inline-flex h-10 w-10 items-center justify-center rounded-full bg-black/40 text-white backdrop-blur-sm transition active:bg-black/55"
-        >
-          <ArrowLeft className="h-5 w-5" aria-hidden />
-        </button>
         <div className="absolute bottom-4 left-4 right-4 space-y-1 text-white">
           <h1 className="text-2xl font-semibold leading-tight">{event.title}</h1>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
