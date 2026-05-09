@@ -1,0 +1,73 @@
+# Supabase project config. Migrations in ./migrations/ are tracked by `supabase db push`.
+# Functions in ./functions/ are deployed by `supabase functions deploy`.
+# Local-dev ports are documented for completeness; we run against the remote project for the hackathon.
+
+project_id = "poruch"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 15
+
+[db.pooler]
+enabled = false
+port = 54329
+pool_mode = "transaction"
+default_pool_size = 20
+max_client_conn = 100
+
+[realtime]
+enabled = false
+
+[studio]
+enabled = true
+port = 54323
+
+[inbucket]
+enabled = false
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[auth]
+enabled = false
+
+[edge_runtime]
+enabled = true
+policy = "oneshot"
+inspector_port = 8083
+
+[functions.bot]
+verify_jwt = false
+
+[functions.rsvp-create]
+verify_jwt = false
+
+[functions.ics-generate]
+verify_jwt = false
+
+[functions.notify-scheduler]
+verify_jwt = false
+
+[functions.gemini-rank]
+verify_jwt = false
+
+[functions.gemini-parse-event]
+verify_jwt = false
+
+[functions.gemini-moderate]
+verify_jwt = false
+
+[functions.gemini-copy]
+verify_jwt = false
+
+[analytics]
+enabled = false

@@ -1,0 +1,15 @@
+**/node_modules
+**/.next
+**/dist
+**/build
+**/coverage
+pnpm-lock.yaml
+*.tsbuildinfo
+**/next-env.d.ts
+supabase/.temp
+supabase/.branches
+.env
+.env.*
+
+# user-authored specifications — keep verbatim
+docs/PROMPTS/
