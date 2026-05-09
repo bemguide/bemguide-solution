@@ -146,7 +146,12 @@ export function ClientEventPage({ id }: { id: string }) {
   const startDisplay = event.start_at ?? "";
 
   return (
-    <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
+    // pb-48 leaves clearance for the tallest variant of the fixed
+    // bottom action bar (DeclinedBar: status line + big CTA + share
+    // + py-3 = ~150px) plus a small breathing gap above it. Also
+    // accounts for `--tg-safe-area-inset-bottom` overlap on phones
+    // with a home indicator.
+    <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-48">
       <div className="relative aspect-[16/10] w-full overflow-hidden">
         {event.photo_url ? (
           <Image
