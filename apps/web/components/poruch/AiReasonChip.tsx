@@ -2,8 +2,6 @@
 // as informational rather than promotional. Optional ⓘ button reveals what
 // signals fed the AI (transparency commitment).
 
-import { Info } from "lucide-react";
-
 export function AiReasonChip({
   reason,
   onShowSignals,
@@ -14,7 +12,6 @@ export function AiReasonChip({
   if (!reason) return null;
   return (
     <div className="bg-accent text-accent-foreground flex items-start gap-2 rounded-lg px-3 py-2 text-sm leading-snug">
-      <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
       <span className="flex-1">{reason}</span>
       {onShowSignals ? (
         <button

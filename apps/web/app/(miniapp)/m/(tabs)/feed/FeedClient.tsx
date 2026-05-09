@@ -13,13 +13,15 @@
 //      we have nothing at all.
 //
 // Empty backend → instant empty-state once data arrives (no spinner
-// detour). Telegram-not-loaded → "Open in Telegram" CTA.
+// detour). Telegram-not-loaded → "Open in Telegram" CTA. The page
+// has no top header — the bottom tab bar identifies which screen
+// you're on, so a duplicate "Поруч" title up top would just eat
+// vertical space.
 
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
@@ -60,7 +62,6 @@ export function FeedClient() {
   const [sections, setSections] = useState<DisplaySections | null>(null);
   const [city, setCity] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(true);
   const ranRef = useRef(false);
 
   useEffect(() => {
@@ -70,9 +71,6 @@ export function FeedClient() {
     let cancelled = false;
     const startedAt = performance.now();
 
-    // Hydrate-from-cache step (post-mount, so SSR and first paint
-    // agree). If anything's cached, swap state immediately so the
-    // network round-trip happens against an already-populated view.
     const cached = readFeedCache();
     if (cached) {
       setSections(adapt(cached.sections));
@@ -81,8 +79,6 @@ export function FeedClient() {
 
     async function load() {
       try {
-        // Parallel: /feed defaults to the user's stored city when no
-        // ?city is passed, so it doesn't need /me to resolve first.
         const [me, v2] = await Promise.all([
           getCurrentUser().catch(() => null),
           getFeed(),
@@ -107,14 +103,10 @@ export function FeedClient() {
       } catch (e) {
         if (cancelled) return;
         logApiError("feed", e);
-        // Only surface an error if we have *nothing* to show. With
-        // cached data we keep the stale view and stay quiet.
         if (!cached) {
           if (isNoTelegramEnv(e)) setError("no_telegram_environment");
           else setError(describeError(e, "feed"));
         }
-      } finally {
-        if (!cancelled) setRefreshing(false);
       }
     }
     void load();
@@ -123,21 +115,14 @@ export function FeedClient() {
     };
   }, []);
 
-  // The "Open in Telegram" CTA is its own dedicated screen — don't
-  // bury it under a generic error.
   if (!sections && error === "no_telegram_environment") {
     return <OpenInTelegramScreen />;
   }
 
-  // Hard fail: no cache *and* fetch failed → show the inline error
-  // with a retry link. (The caller can always pull-to-refresh by
-  // re-opening the Mini App.)
   if (!sections && error) {
     return (
       <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
-        <FeedHeader city={city} refreshing={false} />
         <EmptyState
-          icon={<Sparkles className="h-10 w-10" aria-hidden />}
           title="Не вдалось завантажити стрічку"
           body={error}
           action={
@@ -153,12 +138,9 @@ export function FeedClient() {
     );
   }
 
-  // Initial cold load with no cache yet — show a tight skeleton so
-  // there's something on screen within one frame.
   if (!sections) {
     return (
       <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
-        <FeedHeader city={city} refreshing />
         <FeedSkeleton />
       </main>
     );
@@ -171,11 +153,8 @@ export function FeedClient() {
 
   return (
     <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
-      <FeedHeader city={city} refreshing={refreshing} />
-
       {empty ? (
         <EmptyState
-          icon={<Sparkles className="h-10 w-10" aria-hidden />}
           title="Поки що небагато подій"
           body={`У ${city ?? "твоєму місті"} зараз небагато подій. Подивись на мапі або запропонуй свою.`}
           action={
@@ -224,41 +203,7 @@ export function FeedClient() {
           </div>
         </section>
       ) : null}
-
-      <Link
-        href="/m/map"
-        className="text-foreground inline-flex items-center gap-1 text-sm underline-offset-2 hover:underline"
-      >
-        Більше — на мапі
-        <ChevronRight className="h-4 w-4" aria-hidden />
-      </Link>
     </main>
-  );
-}
-
-function FeedHeader({
-  city,
-  refreshing,
-}: {
-  city?: string;
-  refreshing: boolean;
-}) {
-  return (
-    <header className="flex items-center justify-between">
-      <h1 className="text-foreground inline-flex items-center gap-2 text-xl font-semibold">
-        Поруч{city ? ` · ${city}` : ""}
-        {refreshing ? (
-          <RefreshCw className="text-muted-foreground h-4 w-4 animate-spin" aria-hidden />
-        ) : null}
-      </h1>
-      <Link
-        href="/m/me"
-        className="bg-secondary text-secondary-foreground inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
-        aria-label="Профіль"
-      >
-        {city?.[0] ?? "Я"}
-      </Link>
-    </header>
   );
 }
 
@@ -281,9 +226,6 @@ function OpenInTelegramScreen() {
   const deepLink = botUsername ? `https://t.me/${botUsername}?startapp=feed` : null;
   return (
     <main className="px-6 py-10 text-center">
-      <div className="bg-primary/10 mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full">
-        <Sparkles className="text-primary h-6 w-6" aria-hidden />
-      </div>
       <h1 className="text-foreground text-xl font-semibold">Відкрий у Telegram</h1>
       <p className="text-muted-foreground mt-2 text-sm">
         Цей екран працює всередині додатка Telegram — там ми бачимо твій профіль і показуємо події
@@ -300,4 +242,3 @@ function OpenInTelegramScreen() {
     </main>
   );
 }
-

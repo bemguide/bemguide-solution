@@ -72,7 +72,7 @@ export function AccessibilityStrip({
   );
 }
 
-// Compact variant for cards: just a row of small icons + tooltips.
+// Compact variant for cards: a row of text-only chips with the UA label.
 export function AccessibilityChips({
   flags,
   max = 3,
@@ -84,20 +84,16 @@ export function AccessibilityChips({
   const shown = flags.slice(0, max);
   const more = flags.length - shown.length;
   return (
-    <div className="text-muted-foreground flex items-center gap-1 text-xs">
-      {shown.map((flag) => {
-        const Icon = ICONS[flag] ?? Accessibility;
-        return (
-          <span
-            key={flag}
-            className="bg-accent text-accent-foreground inline-flex items-center gap-1 rounded-md px-1.5 py-0.5"
-            aria-label={ACCESSIBILITY_LABELS_UK[flag]}
-          >
-            <Icon className="h-3 w-3" aria-hidden />
-            <span className="text-[11px]">{ACCESSIBILITY_LABELS_UK[flag]}</span>
-          </span>
-        );
-      })}
+    <div className="text-muted-foreground flex flex-wrap items-center gap-1 text-xs">
+      {shown.map((flag) => (
+        <span
+          key={flag}
+          className="bg-accent text-accent-foreground rounded-md px-1.5 py-0.5 text-[11px]"
+          aria-label={ACCESSIBILITY_LABELS_UK[flag]}
+        >
+          {ACCESSIBILITY_LABELS_UK[flag]}
+        </span>
+      ))}
       {more > 0 ? <span className="text-[11px]">+{more}</span> : null}
     </div>
   );
