@@ -12,7 +12,6 @@ const ServerEnv = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1),
   NEXT_PUBLIC_APP_URL: z.string().url(),
   ADMIN_PASSWORD: z.string().min(1),
-  VERCEL_CRON_SECRET: z.string().min(1),
 });
 
 export type ServerEnv = z.infer<typeof ServerEnv>;
