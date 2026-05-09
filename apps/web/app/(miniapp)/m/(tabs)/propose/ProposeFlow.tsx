@@ -189,7 +189,7 @@ export function ProposeFlow() {
       </header>
 
       <form
-        className="flex-1 space-y-5 overflow-y-auto px-4 pb-32 pt-4"
+        className="flex-1 space-y-5 overflow-y-auto px-4 pb-4 pt-4"
         onSubmit={(e) => {
           e.preventDefault();
           void onSubmit();
@@ -416,7 +416,7 @@ export function ProposeFlow() {
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
       </form>
 
-      <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
+      <div className="bg-background/95 border-border shrink-0 border-t px-4 py-3 backdrop-blur">
         <Button
           type="button"
           size="lg"

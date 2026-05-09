@@ -19,7 +19,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Plus, ChevronRight, RefreshCw, Sparkles } from "lucide-react";
+import { ChevronRight, RefreshCw, Sparkles } from "lucide-react";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
@@ -126,7 +126,7 @@ export function FeedClient() {
   // re-opening the Mini App.)
   if (!sections && error) {
     return (
-      <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-24 pt-4">
+      <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
         <FeedHeader city={city} refreshing={false} />
         <EmptyState
           icon={<Sparkles className="h-10 w-10" aria-hidden />}
@@ -149,7 +149,7 @@ export function FeedClient() {
   // there's something on screen within one frame.
   if (!sections) {
     return (
-      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-24 pt-4">
+      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
         <FeedHeader city={city} refreshing />
         <FeedSkeleton />
       </main>
@@ -162,7 +162,7 @@ export function FeedClient() {
     sections.try_new.length === 0;
 
   return (
-    <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-24 pt-4">
+    <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
       <FeedHeader city={city} refreshing={refreshing} />
 
       {empty ? (
@@ -223,15 +223,6 @@ export function FeedClient() {
       >
         Більше — на мапі
         <ChevronRight className="h-4 w-4" aria-hidden />
-      </Link>
-
-      <Link
-        href="/m/propose"
-        aria-label="Запропонувати подію"
-        className="bg-primary text-primary-foreground fixed bottom-6 right-4 z-30 flex h-14 items-center gap-2 rounded-full px-5 text-sm font-semibold shadow-lg"
-      >
-        <Plus className="h-5 w-5" aria-hidden />
-        Запропонувати
       </Link>
     </main>
   );
