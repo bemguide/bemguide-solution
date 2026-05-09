@@ -5,16 +5,23 @@
 // The backend has no moderation gate: as soon as POST returns the row
 // is in `opportunities` and the recompute trigger has fanned out
 // `event_matches`. The user lands on the new event page immediately.
+//
+// Layout: no custom top header — the bottom tab "Запропонувати" already
+// identifies the screen, matching /m/feed and /m/me. Form sections use
+// the shared `SectionHeader`; inputs and chips use the onboarding's
+// card-shaped styling so the surface reads as one consistent app.
 
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ArrowLeft, MapPin } from "lucide-react";
+import { MapPin, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { SectionHeader } from "@/components/poruch/SectionHeader";
 import {
   ACCESSIBILITY_FLAGS,
   ACCESSIBILITY_LABELS_UK,
@@ -27,7 +34,6 @@ import {
   type IdentityPref,
   type InterestCategory,
 } from "@poruch/shared";
-import { cn } from "@/lib/utils";
 import { createOpportunity, describeError, getCurrentUser, logApiError } from "@/lib/api";
 
 const CITY_COORDS: Record<string, { lat: number; lng: number }> = {
@@ -63,8 +69,18 @@ type FormState = {
 const DEFAULT_DURATION = 90;
 const DEFAULT_CITY = ENABLED_CITY;
 
+// Card-shaped field — overrides Input's default bottom-line-only style so
+// the title field is as visible as the description box. Mirrors what
+// /m/onboarding uses for every input in the flow.
+const inputClasses = "h-11 rounded-xl border bg-card px-3";
+const textareaClasses =
+  "border-border bg-card focus-visible:border-b-primary min-h-[120px] rounded-xl border px-3 py-3 text-base";
+// Same chip pattern as /m/onboarding, so the propose form's selectors
+// look identical to the onboarding's.
+const chipItemClasses =
+  "h-10 rounded-full border bg-card text-foreground px-4 text-sm font-medium normal-case tracking-normal hover:bg-card hover:border-primary/40 data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground";
+
 export function ProposeFlow() {
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState<{ id: string } | null>(null);
@@ -157,16 +173,30 @@ export function ProposeFlow() {
 
   if (submitted) {
     return (
-      <main className="flex flex-1 flex-col gap-6 px-6 py-10 text-center">
-        <h1 className="text-foreground text-2xl font-semibold">Опубліковано.</h1>
-        <p className="text-muted-foreground">
-          Подія вже у стрічці у людей з твого міста.
-        </p>
-        <div className="flex flex-col gap-2">
-          <Button asChild className="mx-auto h-12">
+      <main className="flex flex-1 flex-col gap-5 overflow-y-auto px-4 pb-6 pt-6">
+        <section className="bg-card border-border flex flex-col items-center gap-4 rounded-xl border px-5 py-8 text-center">
+          <div className="bg-primary/10 flex h-14 w-14 items-center justify-center rounded-full">
+            <Sparkles className="text-primary h-6 w-6" aria-hidden />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-foreground text-xl font-semibold leading-tight">
+              Опубліковано
+            </h1>
+            <p className="text-muted-foreground text-sm">
+              Подія вже у стрічці у людей з твого міста.
+            </p>
+          </div>
+        </section>
+        <div className="space-y-2">
+          <Button asChild size="lg" className="h-12 w-full text-base font-semibold">
             <Link href={`/m/event/${submitted.id}`}>До події</Link>
           </Button>
-          <Button asChild variant="outline" className="mx-auto h-12">
+          <Button
+            asChild
+            variant="outline"
+            size="lg"
+            className="h-12 w-full text-base font-semibold"
+          >
             <Link href="/m/feed">До стрічки</Link>
           </Button>
         </div>
@@ -176,20 +206,8 @@ export function ProposeFlow() {
 
   return (
     <main className="flex flex-1 flex-col">
-      <header className="border-border flex items-center gap-2 border-b px-4 py-3">
-        <button
-          type="button"
-          onClick={() => router.push("/m/feed")}
-          aria-label="Назад"
-          className="text-muted-foreground hover:bg-muted -ml-2 inline-flex h-9 w-9 items-center justify-center rounded-full"
-        >
-          <ArrowLeft className="h-5 w-5" aria-hidden />
-        </button>
-        <h1 className="text-foreground text-lg font-semibold">Запропонувати подію</h1>
-      </header>
-
       <form
-        className="flex-1 space-y-5 overflow-y-auto px-4 pb-4 pt-4"
+        className="flex-1 space-y-6 overflow-y-auto px-4 pb-6 pt-6"
         onSubmit={(e) => {
           e.preventDefault();
           void onSubmit();
@@ -204,44 +222,47 @@ export function ProposeFlow() {
               onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))}
               placeholder="наприклад, шахи в суботу"
               maxLength={200}
+              className={inputClasses}
               required
             />
           </div>
           <div className="space-y-2">
             <Label htmlFor="description">Опис (необов'язково)</Label>
-            <textarea
+            <Textarea
               id="description"
               value={form.description}
               onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
               maxLength={2000}
               rows={4}
               placeholder="Кілька слів про те, що буде."
-              className="border-border bg-card focus-visible:border-primary focus-visible:ring-primary/20 min-h-[100px] w-full rounded-xl border px-3 py-2 text-base focus-visible:outline-none focus-visible:ring-2"
+              className={textareaClasses}
             />
           </div>
         </Section>
 
         <Section title="Де">
           <div className="space-y-2">
-            <Label htmlFor="city">Місто</Label>
-            <div className="flex flex-wrap gap-2">
+            <Label>Місто</Label>
+            <ToggleGroup
+              type="single"
+              spacing={2}
+              value={form.city}
+              onValueChange={(v) => {
+                if (!v || v !== ENABLED_CITY) return;
+                setForm((f) => ({ ...f, city: v }));
+              }}
+              className="flex flex-wrap"
+            >
               {DEMO_CITIES.map((c) => {
                 const enabled = c === ENABLED_CITY;
-                const active = form.city === c;
                 return (
-                  <button
+                  <ToggleGroupItem
                     key={c}
-                    type="button"
-                    onClick={() => enabled && setForm((f) => ({ ...f, city: c }))}
+                    value={c}
+                    variant="outline"
                     disabled={!enabled}
-                    aria-pressed={active}
-                    className={cn(
-                      "inline-flex h-10 items-center gap-1.5 rounded-full border px-4 text-sm transition",
-                      active
-                        ? "border-primary bg-accent text-primary"
-                        : "border-border bg-card text-foreground hover:border-primary/40",
-                      !enabled && "cursor-not-allowed opacity-50",
-                    )}
+                    className={chipItemClasses}
+                    aria-label={enabled ? c : `${c} (поки що недоступно)`}
                   >
                     <MapPin className="h-3.5 w-3.5" aria-hidden />
                     {c}
@@ -250,10 +271,10 @@ export function ProposeFlow() {
                         · скоро
                       </span>
                     ) : null}
-                  </button>
+                  </ToggleGroupItem>
                 );
               })}
-            </div>
+            </ToggleGroup>
             <p className="text-muted-foreground text-xs">
               Зараз приймаємо події тільки в Дніпрі.
             </p>
@@ -266,6 +287,7 @@ export function ProposeFlow() {
               onChange={(e) => setForm((f) => ({ ...f, address: e.target.value }))}
               placeholder="наприклад, бібліотека ім. Лесі Українки, вул. Грушевського 5"
               maxLength={200}
+              className={inputClasses}
             />
           </div>
         </Section>
@@ -279,6 +301,7 @@ export function ProposeFlow() {
                 type="date"
                 value={form.date}
                 onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                className={inputClasses}
                 required
               />
             </div>
@@ -289,6 +312,7 @@ export function ProposeFlow() {
                 type="time"
                 value={form.time}
                 onChange={(e) => setForm((f) => ({ ...f, time: e.target.value }))}
+                className={inputClasses}
                 required
               />
             </div>
@@ -307,6 +331,7 @@ export function ProposeFlow() {
                   durationMin: Number(e.target.value) || DEFAULT_DURATION,
                 }))
               }
+              className={inputClasses}
             />
           </div>
         </Section>
@@ -320,7 +345,10 @@ export function ProposeFlow() {
               min={0}
               max={100000}
               value={form.priceUah}
-              onChange={(e) => setForm((f) => ({ ...f, priceUah: Number(e.target.value) || 0 }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, priceUah: Number(e.target.value) || 0 }))
+              }
+              className={inputClasses}
             />
           </div>
           <div className="space-y-2">
@@ -328,95 +356,92 @@ export function ProposeFlow() {
             <Input
               id="organizer"
               value={form.organizerContact}
-              onChange={(e) => setForm((f) => ({ ...f, organizerContact: e.target.value }))}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, organizerContact: e.target.value }))
+              }
               placeholder="@telegram або +380…"
+              className={inputClasses}
             />
           </div>
         </Section>
 
-        <Section title="Категорії">
-          <div className="flex flex-wrap gap-2">
-            {INTEREST_CATEGORIES.map((c) => {
-              const active = interestSet.has(c);
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => {
-                    const next = new Set(interestSet);
-                    if (active) next.delete(c);
-                    else next.add(c);
-                    setForm((f) => ({ ...f, interests: [...next] }));
-                  }}
-                  className={cn(
-                    "inline-flex h-10 items-center rounded-full border px-4 text-sm transition",
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-card text-foreground hover:border-primary/40",
-                  )}
-                  aria-pressed={active}
-                >
-                  {INTEREST_LABELS_UK[c]}
-                </button>
-              );
-            })}
-          </div>
+        <Section title="Категорії" subtitle="Можна кілька або жодної.">
+          <ToggleGroup
+            type="multiple"
+            spacing={2}
+            value={[...interestSet]}
+            onValueChange={(v) =>
+              setForm((f) => ({ ...f, interests: v as InterestCategory[] }))
+            }
+            className="flex flex-wrap"
+          >
+            {INTEREST_CATEGORIES.map((c) => (
+              <ToggleGroupItem
+                key={c}
+                value={c}
+                variant="outline"
+                className={chipItemClasses}
+              >
+                {INTEREST_LABELS_UK[c]}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </Section>
 
         <Section title="Для кого">
-          <div className="flex flex-wrap gap-2">
+          <ToggleGroup
+            type="single"
+            spacing={2}
+            value={form.identity}
+            onValueChange={(v) =>
+              v && setForm((f) => ({ ...f, identity: v as IdentityPref }))
+            }
+            className="flex flex-wrap"
+          >
             {IDENTITY_PREFS.map((p) => (
-              <button
+              <ToggleGroupItem
                 key={p}
-                type="button"
-                onClick={() => setForm((f) => ({ ...f, identity: p }))}
-                className={cn(
-                  "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
-                  form.identity === p
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-card text-foreground hover:border-primary/40",
-                )}
-                aria-pressed={form.identity === p}
+                value={p}
+                variant="outline"
+                className={chipItemClasses}
               >
                 {IDENTITY_LABELS_UK[p]}
-              </button>
+              </ToggleGroupItem>
             ))}
-          </div>
+          </ToggleGroup>
         </Section>
 
         <Section title="Доступність">
-          <div className="flex flex-wrap gap-2">
-            {ACCESSIBILITY_FLAGS.map((f) => {
-              const active = accSet.has(f);
-              return (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => {
-                    const next = new Set(accSet);
-                    if (active) next.delete(f);
-                    else next.add(f);
-                    setForm((s) => ({ ...s, accessibility: [...next] }));
-                  }}
-                  className={cn(
-                    "inline-flex h-9 items-center rounded-full border px-3 text-sm transition",
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-card text-foreground hover:border-primary/40",
-                  )}
-                  aria-pressed={active}
-                >
-                  {ACCESSIBILITY_LABELS_UK[f]}
-                </button>
-              );
-            })}
-          </div>
+          <ToggleGroup
+            type="multiple"
+            spacing={2}
+            value={[...accSet]}
+            onValueChange={(v) =>
+              setForm((f) => ({ ...f, accessibility: v as AccessibilityFlag[] }))
+            }
+            className="flex flex-wrap"
+          >
+            {ACCESSIBILITY_FLAGS.map((flag) => (
+              <ToggleGroupItem
+                key={flag}
+                value={flag}
+                variant="outline"
+                className={chipItemClasses}
+              >
+                {ACCESSIBILITY_LABELS_UK[flag]}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         </Section>
 
-        {error ? <p className="text-destructive text-sm">{error}</p> : null}
+        {error ? (
+          <div className="bg-destructive/10 text-destructive border-destructive/30 rounded-xl border px-3 py-2 text-sm">
+            {error}
+          </div>
+        ) : null}
       </form>
 
-      <div className="bg-background/95 border-border shrink-0 border-t px-4 py-3 backdrop-blur">
+      <div className="bg-background border-border/60 shrink-0 border-t px-4 pb-5 pt-3">
         <Button
           type="button"
           size="lg"
@@ -431,10 +456,18 @@ export function ProposeFlow() {
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <section className="space-y-3">
-      <h2 className="text-foreground text-base font-semibold">{title}</h2>
+    <section>
+      <SectionHeader title={title} subtitle={subtitle} />
       <div className="space-y-3">{children}</div>
     </section>
   );

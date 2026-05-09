@@ -15,6 +15,7 @@ import { WhoIsGoing } from "@/components/poruch/WhoIsGoing";
 import {
   ApiError,
   describeError,
+  getMyInvitations,
   getOpportunity,
   getOpportunityAttendees,
   getRoom,
@@ -28,11 +29,16 @@ import { EventActions } from "./EventActions";
 type Attending =
   /** GET /opportunities/:id/room hasn't resolved yet. */
   | { kind: "loading" }
-  /** Backend said 403 not_attendee — render the RSVP CTA. */
+  /** No prior response — render the RSVP CTA. */
   | { kind: "no" }
   /** User is in event_attendees. `room` is null when the worker hasn't
    *  provisioned the chat yet (we'll keep showing "Чат готується…"). */
-  | { kind: "yes"; room: V2EventRoom | null };
+  | { kind: "yes"; room: V2EventRoom | null }
+  /** Sticky decline: backend refuses re-accept (409 already_rsvped),
+   *  so the only way back in is to contact the organizer. We swap the
+   *  bottom bar for that affordance instead of leaving the user
+   *  staring at a broken "Я буду". */
+  | { kind: "declined" };
 
 type LoadState =
   | { kind: "loading" }
@@ -58,28 +64,47 @@ export function ClientEventPage({ id }: { id: string }) {
     let cancelled = false;
     async function load() {
       try {
-        // apiFetch auto-exchanges initData and self-heals 401, so no
-        // explicit auth dance here. Three calls fire in parallel:
+        // Four parallel calls so first paint is one-RTT:
         //   1. event itself (public)
         //   2. attendee count + names
-        //   3. room — RLS gives 403 to non-attendees, 200 to attendees.
-        //      That's our "is the user already signed up?" probe.
-        const [event, attendees, attendingResult] = await Promise.all([
+        //   3. /room — 200 means attending, 403 means "no row in
+        //      event_attendees", which covers BOTH "never responded"
+        //      and "declined".
+        //   4. /me/invitations (top page) — disambiguates 3 by
+        //      finding a row for this event with response='declined'.
+        //      Bounded to limit=50; users with hundreds of pending
+        //      invitations would lose the signal here, but that's
+        //      not a real shape today.
+        const [event, attendees, roomResult, invitations] = await Promise.all([
           getOpportunity(id),
           getOpportunityAttendees(id),
           getRoom(id)
-            .then<Attending>((room) => ({ kind: "yes", room }))
-            .catch<Attending>((e: unknown) => {
-              if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
-                return { kind: "no" };
-              }
-              // Any other error (5xx, network) — assume not attending so
-              // the RSVP CTA is reachable; user can still sign up.
-              return { kind: "no" };
-            }),
+            .then((room) => ({ ok: true as const, room }))
+            .catch((e: unknown) => ({ ok: false as const, error: e })),
+          getMyInvitations({ limit: 50 }).catch(() => ({ items: [], next_cursor: null })),
         ]);
         if (cancelled) return;
-        setState({ kind: "ready", event, attendees, attending: attendingResult });
+
+        let attending: Attending;
+        if (roomResult.ok) {
+          attending = { kind: "yes", room: roomResult.room };
+        } else {
+          const inv = invitations.items.find((i) => i.event_id === id);
+          if (inv?.response === "declined") {
+            attending = { kind: "declined" };
+          } else if (
+            roomResult.error instanceof ApiError &&
+            (roomResult.error.status === 403 || roomResult.error.status === 404)
+          ) {
+            attending = { kind: "no" };
+          } else {
+            // Backend hiccup — surface the RSVP CTA so the user can
+            // still try; the action handler will retry.
+            attending = { kind: "no" };
+          }
+        }
+
+        setState({ kind: "ready", event, attendees, attending });
       } catch (e) {
         if (cancelled) return;
         setState({ kind: "error", message: describeError(e) });
@@ -117,15 +142,6 @@ export function ClientEventPage({ id }: { id: string }) {
 
   const { event, attendees, attending } = state;
   const startDisplay = event.start_at ?? "";
-
-  function setAttendingRoom(room: V2EventRoom | null) {
-    setState((s) =>
-      s.kind === "ready" ? { ...s, attending: { kind: "yes", room } } : s,
-    );
-  }
-  function setNotAttending() {
-    setState((s) => (s.kind === "ready" ? { ...s, attending: { kind: "no" } } : s));
-  }
 
   return (
     <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
@@ -219,10 +235,10 @@ export function ClientEventPage({ id }: { id: string }) {
         eventTitle={event.title}
         eventStartAt={startDisplay}
         startedAlready={startedAlready(event.start_at)}
+        organizerContact={event.organizer_contact}
         attending={attending}
         onAttendingChange={(next) => {
-          if (next.kind === "yes") setAttendingRoom(next.room);
-          else setNotAttending();
+          setState((s) => (s.kind === "ready" ? { ...s, attending: next } : s));
         }}
       />
     </main>

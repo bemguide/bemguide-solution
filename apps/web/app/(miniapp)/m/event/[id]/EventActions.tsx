@@ -1,23 +1,16 @@
-// Sticky CTA bar for the event detail page. Two distinct states:
+// Sticky CTA bar for the event detail page. Four render branches
+// driven by the parent's `attending` state:
 //
-//   attending.kind === "no"
-//     → Я буду / Поділитися / Не зараз
-//        Tapping "Я буду" runs the combined RSVP flow (asks display
-//        name on first tap, posts /opportunities/:id/rsvp, polls
-//        /room until the chat is provisioned).
+//   "loading"  → tiny skeleton (room probe in flight)
+//   "no"       → RSVP CTA + name-prompt sheet
+//   "yes"      → chat link + share + decline + privacy toggle
+//   "declined" → "ти не йдеш" + organizer-contact link
+//                (backend's sticky-decline policy means the user
+//                 can't re-accept through the API; the only way
+//                 back in is to talk to the organizer).
 //
-//   attending.kind === "yes"
-//     → "Ти йдеш" indicator at top of bar
-//     → Чат події (or "Чат готується…" while worker spins it up)
-//     → Поділитися
-//     → Privacy toggle (Анонімно / Показувати «name»)
-//     → Маленький "Не зможу" link to decline
-//
-//   attending.kind === "loading"
-//     → renders nothing (the page is short-lived in this state)
-//
-// Parent owns the `attending` state and gets notified on transitions
-// (RSVP success / decline) via `onAttendingChange`.
+// Parent owns the state and is notified on transitions via
+// `onAttendingChange`.
 
 "use client";
 
@@ -30,6 +23,7 @@ import { Label } from "@/components/ui/label";
 import { getTgUser } from "@/lib/telegram/client";
 import { cn } from "@/lib/utils";
 import {
+  ApiError,
   describeError,
   getRoom,
   logApiError,
@@ -46,6 +40,7 @@ export function EventActions({
   eventId,
   eventTitle,
   startedAlready,
+  organizerContact,
   attending,
   onAttendingChange,
 }: {
@@ -54,12 +49,11 @@ export function EventActions({
   /** ISO `start_at`. Read by the bar to disable RSVP after the event begins. */
   eventStartAt: string;
   startedAlready: boolean;
+  organizerContact: string | null;
   attending: Attending;
   onAttendingChange: (next: Attending) => void;
 }) {
   if (attending.kind === "loading") {
-    // Tiny placeholder so the bottom of the page isn't a void during
-    // the brief room-probe window.
     return (
       <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
         <div className="bg-muted h-12 w-full animate-pulse rounded-md" />
@@ -72,8 +66,17 @@ export function EventActions({
         eventId={eventId}
         eventTitle={eventTitle}
         room={attending.room}
-        onDeclined={() => onAttendingChange({ kind: "no" })}
         onRoomLanded={(room) => onAttendingChange({ kind: "yes", room })}
+        onDeclined={() => onAttendingChange({ kind: "declined" })}
+      />
+    );
+  }
+  if (attending.kind === "declined") {
+    return (
+      <DeclinedBar
+        eventId={eventId}
+        eventTitle={eventTitle}
+        organizerContact={organizerContact}
       />
     );
   }
@@ -83,33 +86,33 @@ export function EventActions({
       eventTitle={eventTitle}
       startedAlready={startedAlready}
       onAccepted={(room) => onAttendingChange({ kind: "yes", room })}
+      onAlreadyDeclined={() => onAttendingChange({ kind: "declined" })}
     />
   );
 }
 
 // ----------------------------------------------------------------
-// "I'm going" state — chat link + privacy + decline
+// "I'm going" — chat link + share + decline + privacy
 // ----------------------------------------------------------------
 
 function AttendingBar({
   eventId,
   eventTitle,
   room,
-  onDeclined,
   onRoomLanded,
+  onDeclined,
 }: {
   eventId: string;
   eventTitle: string;
   room: V2EventRoom | null;
-  onDeclined: () => void;
   onRoomLanded: (room: V2EventRoom) => void;
+  onDeclined: () => void;
 }) {
   const [showName, setShowName] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<{ cancel: () => void } | null>(null);
 
-  // If the room hasn't been provisioned yet, poll until it lands.
   useEffect(() => {
     if (room?.chat_provider) return;
     pollRef.current?.cancel();
@@ -126,7 +129,7 @@ function AttendingBar({
           return;
         }
       } catch {
-        /* ignore — try again until the budget runs out */
+        /* try again until budget runs out */
       }
       if (attempts < ROOM_POLL_MAX_ATTEMPTS) {
         window.setTimeout(tick, ROOM_POLL_INTERVAL_MS);
@@ -231,7 +234,9 @@ function AttendingBar({
           style={{ touchAction: "manipulation" }}
           aria-pressed={showName}
         >
-          {showName ? "Показую ім'я · натисни щоб приховати" : "Анонімно · натисни щоб показати ім'я"}
+          {showName
+            ? "Показую ім'я · натисни щоб приховати"
+            : "Анонімно · натисни щоб показати ім'я"}
         </button>
 
         {error ? <p className="text-destructive text-xs">{error}</p> : null}
@@ -241,7 +246,85 @@ function AttendingBar({
 }
 
 // ----------------------------------------------------------------
-// "Not signed up" state — RSVP CTA + name prompt sheet
+// "Already declined" — sticky on the backend, contact-organizer path
+// ----------------------------------------------------------------
+
+function DeclinedBar({
+  eventId,
+  eventTitle,
+  organizerContact,
+}: {
+  eventId: string;
+  eventTitle: string;
+  organizerContact: string | null;
+}) {
+  const contactHref = buildOrganizerHref(organizerContact);
+
+  async function onShareUrl() {
+    const shareUrl = `${window.location.origin}/event/${eventId}`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: eventTitle, url: shareUrl });
+        return;
+      } catch {
+        /* user cancelled */
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch {
+      window.open(shareUrl, "_blank", "noopener");
+    }
+  }
+
+  return (
+    <div className="bg-background/95 border-border fixed inset-x-0 bottom-0 z-30 mx-auto w-full max-w-md border-t px-4 py-3 backdrop-blur">
+      <div className="space-y-2">
+        <p className="text-muted-foreground text-center text-sm">
+          Ти раніше відмовився. Передумав? Напиши організатору.
+        </p>
+        {contactHref ? (
+          <Button asChild size="lg" className="h-12 w-full text-base font-semibold">
+            <a href={contactHref} target="_blank" rel="noopener noreferrer">
+              Написати організатору
+            </a>
+          </Button>
+        ) : (
+          <Button type="button" size="lg" className="h-12 w-full text-base font-semibold" disabled>
+            Контакт організатора недоступний
+          </Button>
+        )}
+        <Button type="button" variant="outline" className="h-11 w-full" onClick={() => void onShareUrl()}>
+          <Share2 className="mr-1.5 h-4 w-4" aria-hidden />
+          Поділитися
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Best-effort contact → URL conversion. Backend stores
+ * `organizer_contact` as free text — could be a Telegram handle, a
+ * URL, an email, a phone, or arbitrary instructions. We sniff the
+ * shape and build the right scheme; bail out (return null) if we
+ * can't tell.
+ */
+function buildOrganizerHref(raw: string | null): string | null {
+  if (!raw) return null;
+  const c = raw.trim();
+  if (!c) return null;
+  if (c.startsWith("http://") || c.startsWith("https://")) return c;
+  if (c.startsWith("@")) return `https://t.me/${c.slice(1)}`;
+  if (/^t\.me\//i.test(c)) return `https://${c}`;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(c)) return `mailto:${c}`;
+  if (/^\+?[\d\s\-()]{6,}$/.test(c)) return `tel:${c.replace(/\s/g, "")}`;
+  // Free-form text / instructions — no actionable href.
+  return null;
+}
+
+// ----------------------------------------------------------------
+// "Not signed up" — RSVP CTA + name prompt sheet
 // ----------------------------------------------------------------
 
 function RsvpBar({
@@ -249,11 +332,15 @@ function RsvpBar({
   eventTitle,
   startedAlready,
   onAccepted,
+  onAlreadyDeclined,
 }: {
   eventId: string;
   eventTitle: string;
   startedAlready: boolean;
   onAccepted: (room: V2EventRoom | null) => void;
+  /** Backend rejected the accept with `409 already_rsvped` — tells
+   *  the parent to render the "you already declined" branch. */
+  onAlreadyDeclined: () => void;
 }) {
   const [needsName, setNeedsName] = useState(false);
   const [name, setName] = useState("");
@@ -277,6 +364,14 @@ function RsvpBar({
       onAccepted(res.room ?? null);
     } catch (e) {
       logApiError("rsvp", e);
+      // Sticky-decline path — flip to the dedicated "you already
+      // declined" UI so the user can act on it instead of seeing a
+      // raw error.
+      if (e instanceof ApiError && e.status === 409 && e.message === "already_rsvped") {
+        setNeedsName(false);
+        onAlreadyDeclined();
+        return;
+      }
       setError(describeError(e, "rsvp"));
     } finally {
       setBusy(false);
@@ -329,7 +424,12 @@ function RsvpBar({
             {startedAlready ? "Уже почалося" : "Я буду"}
           </Button>
           <div className="grid grid-cols-2 gap-2">
-            <Button type="button" variant="outline" className="h-11" onClick={() => void onShareUrl()}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11"
+              onClick={() => void onShareUrl()}
+            >
               <Share2 className="mr-1.5 h-4 w-4" aria-hidden />
               Поділитися
             </Button>
