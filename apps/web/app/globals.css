@@ -103,27 +103,49 @@
 /* Colour-blind palette overrides. Shift `--primary`, `--ring`, and
    `--accent` away from the hue pairs each condition can't resolve.
    We intentionally only override these three vars so the rest of the
-   palette (cream background, neutral text) stays warm and familiar. */
-:root[data-palette="protanopia"],
-:root[data-palette="deuteranopia"] {
-  /* Red-green confusion — shift the brand teal toward unambiguous blue. */
+   palette (cream background, neutral text) stays warm and familiar.
+   Three presets, three distinct hues — the picker should *look*
+   different so the user can tell which preset is active. */
+:root[data-palette="protanopia"] {
+  /* Protanopia (L-cone deficit): reds appear dim and confuse with
+     greens. Shift the brand teal toward saturated cyan-blue — long
+     wavelengths drop out, so we anchor on the short end instead. */
   --primary: #2a6e9c;
   --primary-foreground: #ffffff;
   --ring: #2a6e9c;
   --accent: #d6e6f0;
   --accent-foreground: #103a55;
 }
-:root.dark[data-palette="protanopia"],
-:root.dark[data-palette="deuteranopia"] {
+:root.dark[data-palette="protanopia"] {
   --primary: #5fa3cf;
   --primary-foreground: #0d1817;
   --ring: #5fa3cf;
   --accent: #103a55;
   --accent-foreground: #d6e6f0;
 }
+:root[data-palette="deuteranopia"] {
+  /* Deuteranopia (M-cone deficit): greens appear dim. Same red-green
+     confusion as protanopia, but we deliberately pick a violet hue
+     so the user can visibly tell this preset apart from the
+     protanopia preset. Violet sits well outside the red-green axis
+     and is unambiguous against the cream background. */
+  --primary: #6b4ea3;
+  --primary-foreground: #ffffff;
+  --ring: #6b4ea3;
+  --accent: #e2dcf0;
+  --accent-foreground: #2d1f50;
+}
+:root.dark[data-palette="deuteranopia"] {
+  --primary: #a18ad2;
+  --primary-foreground: #0d1817;
+  --ring: #a18ad2;
+  --accent: #2d1f50;
+  --accent-foreground: #e2dcf0;
+}
 :root[data-palette="tritanopia"] {
-  /* Blue-yellow confusion — shift toward warm red, easily separated
-     from the cream background and the neutral foreground. */
+  /* Tritanopia (S-cone deficit): blue-yellow confusion. Shift toward
+     warm red, easily separated from the cream background and the
+     neutral text. */
   --primary: #b04050;
   --primary-foreground: #ffffff;
   --ring: #b04050;
