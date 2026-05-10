@@ -42,9 +42,46 @@ import {
   type ProgramsFeedResponse,
   type V2User,
 } from "@/lib/api";
+import { loadHealthPrefs } from "@/lib/app-prefs";
 import type { EventForDisplay } from "@/lib/types";
 
 type Tab = "all" | "health" | "discounts" | "programs";
+
+const TAB_PREF_KEY = "poruch.feed.last_tab.v1";
+const VALID_TABS: ReadonlySet<Tab> = new Set(["all", "health", "discounts", "programs"]);
+
+/**
+ * Pick the initial tab on a fresh mount per spec v2 §6.2:
+ *   - If the user previously picked a tab here, restore it.
+ *   - Otherwise, if onboarding flagged `health_assistance_needed`,
+ *     drop them on «Здоровʼя» so the screen they land on is already
+ *     useful.
+ *   - Otherwise default to «Все».
+ *
+ * Reading localStorage at init time is safe: this component is "use
+ * client", so the call only fires after hydration.
+ */
+function pickInitialTab(): Tab {
+  if (typeof window === "undefined") return "all";
+  try {
+    const stored = window.localStorage.getItem(TAB_PREF_KEY);
+    if (stored && VALID_TABS.has(stored as Tab)) return stored as Tab;
+  } catch {
+    /* localStorage blocked — fall through */
+  }
+  const health = loadHealthPrefs();
+  if (health.needed === true) return "health";
+  return "all";
+}
+
+function persistTabChoice(tab: Tab): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(TAB_PREF_KEY, tab);
+  } catch {
+    /* non-fatal */
+  }
+}
 
 type DisplaySections = {
   today_tomorrow: EventForDisplay[];
@@ -92,7 +129,13 @@ const chipItemClasses =
   "h-9 rounded-full border bg-card text-foreground px-4 text-sm font-medium normal-case tracking-normal hover:bg-card hover:border-primary/40 data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground";
 
 export function FeedClient() {
-  const [tab, setTab] = useState<Tab>("all");
+  // Lazy initialiser so the localStorage read happens once at mount
+  // and never re-runs on parent re-renders.
+  const [tab, setTabState] = useState<Tab>(pickInitialTab);
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    persistTabChoice(next);
+  };
 
   // Default-tab state (cached, sticky across remounts).
   const [sections, setSections] = useState<DisplaySections | null>(null);
@@ -234,9 +277,20 @@ export function FeedClient() {
     return <OpenInTelegramScreen />;
   }
 
+  // Soft profile-completion nudge for users who landed on the feed
+  // without finishing onboarding. Root no longer force-redirects new
+  // users into onboarding (the feed is the default surface), so this
+  // banner is the only way they discover the questionnaire — keep it
+  // visible whenever `me.city` is null and they're on the default
+  // tab. Filtered tabs are scoped enough that the prompt would feel
+  // off-topic.
+  const showOnboardingNudge = me !== null && me.city === null && tab === "all";
+
   return (
     <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
       <FilterTabs tab={tab} onChange={setTab} />
+
+      {showOnboardingNudge ? <OnboardingNudge /> : null}
 
       {tab === "all" ? (
         <DefaultBody
@@ -263,6 +317,25 @@ export function FeedClient() {
         />
       )}
     </main>
+  );
+}
+
+function OnboardingNudge() {
+  // One-line invitation, not a wall of copy. Aim is to make the
+  // user *aware* that personalisation exists without blocking them
+  // from browsing the feed. The `Link` covers the whole strip so
+  // anywhere they tap leads into onboarding.
+  return (
+    <Link
+      href="/m/onboarding"
+      className="bg-accent/40 border-border text-foreground hover:border-primary/40 hover:bg-accent/60 -mt-1 block rounded-xl border px-4 py-3 text-sm transition-colors"
+      style={{ touchAction: "manipulation" }}
+    >
+      <strong className="text-foreground font-semibold">Налаштувати профіль</strong>{" "}
+      <span className="text-muted-foreground">
+        — щоб стрічка показувала те, що тобі важливо. Кілька питань.
+      </span>
+    </Link>
   );
 }
 
