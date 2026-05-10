@@ -104,7 +104,6 @@ export function OrganizerCheckIn({
   const visible = isOrganizerByDb || isOrganizerByHeuristic;
   if (!visible) return null;
 
-  const willCheckInWork = isOrganizerByDb;
   const createChatUrl = buildCreateChatUrl(eventId);
   const chatInviteUrl = room?.chat_invite_url ?? null;
 
@@ -139,10 +138,6 @@ export function OrganizerCheckIn({
       <ScannerBlock
         result={result}
         onScan={() => void onScan()}
-        willCheckInWork={willCheckInWork}
-        createdBy={createdBy}
-        meId={me?.id ?? null}
-        eventId={eventId}
       />
     </section>
   );
@@ -202,30 +197,15 @@ function ChatBlock({
 function ScannerBlock({
   result,
   onScan,
-  willCheckInWork,
-  createdBy,
-  meId,
-  eventId,
 }: {
   result: Result;
   onScan: () => void;
-  /** Backend's authz check (admin OR `created_by === me.id`) will pass.
-   *  `false` means the user matches our heuristic but the backend
-   *  doesn't have them as the row's organizer. Scans will 403. */
-  willCheckInWork: boolean;
-  createdBy: string | null;
-  meId: string | null;
-  eventId: string;
 }) {
   return (
     <div className="space-y-2">
       <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
         Реєстрація учасників
       </p>
-
-      {!willCheckInWork ? (
-        <PreflightWarning createdBy={createdBy} meId={meId} eventId={eventId} />
-      ) : null}
 
       <Button
         type="button"
@@ -244,40 +224,6 @@ function ScannerBlock({
       </Button>
 
       <ResultLine result={result} />
-    </div>
-  );
-}
-
-function PreflightWarning({
-  createdBy,
-  meId,
-  eventId,
-}: {
-  createdBy: string | null;
-  meId: string | null;
-  eventId: string;
-}) {
-  // Two distinct shapes:
-  //   - createdBy is null → row was created before migration 0013 ran
-  //     on prod. Need someone to backfill.
-  //   - createdBy is set but != me → the event was created from a
-  //     different account (e.g. admin seed, or a different TG login).
-  const reason = createdBy === null
-    ? "Бекенд не знає, хто створив цю подію (поле created_by порожнє — стара подія)."
-    : "Бекенд бачить тебе як іншого користувача, ніж того, хто створив подію.";
-  return (
-    <div className="bg-destructive/5 text-destructive rounded-md border border-destructive/30 px-3 py-2 text-xs leading-snug">
-      <p className="font-semibold">Скан зараз не працюватиме.</p>
-      <p>{reason}</p>
-      {meId ? (
-        <p className="text-muted-foreground mt-1 break-all">
-          Швидкий фікс: у Supabase виконай
-          {" "}
-          <code className="text-foreground">
-            update opportunities set created_by = &apos;{meId}&apos; where id = &apos;{eventId}&apos;;
-          </code>
-        </p>
-      ) : null}
     </div>
   );
 }

@@ -149,6 +149,61 @@ export function ProposeFlow() {
     pin: null,
   });
 
+  // Lock the screen against pull-to-close while the propose flow is
+  // open. TgInit calls `disableVerticalSwipes()` once at app boot, but
+  // the inline Leaflet map captures touches and re-arms Telegram's
+  // swipe-to-dismiss detector on the next vertical gesture — so a user
+  // who scrolls past the map then drags down on the form ends up
+  // accidentally closing the entire Mini App, losing whatever they've
+  // typed. Re-asserting the API on mount of *this* screen is the
+  // documented escape hatch (https://core.telegram.org/bots/webapps —
+  // "the swipe-to-close gesture is per-WebApp-event, not per-app").
+  //
+  // Two layers of belt-and-braces:
+  //   1. Telegram API   — disables the host-level swipe-to-close
+  //      gesture. Only available on Bot API ≥ 7.8; older clients
+  //      noop silently.
+  //   2. CSS overscroll — `overscroll-behavior: none` on <html> kills
+  //      the WKWebView rubber-band that, even with the Telegram API
+  //      respected, can still trigger the host's "user is dragging
+  //      the WebView" heuristic on iOS. Cheap + works everywhere.
+  //
+  // Both reverted on unmount so the rest of the app (chat, feed,
+  // event detail) keep their default scroll behavior.
+  useEffect(() => {
+    type WAS = {
+      disableVerticalSwipes?: () => void;
+      enableVerticalSwipes?: () => void;
+      isVersionAtLeast?: (v: string) => boolean;
+    };
+    const wa = (
+      window as unknown as { Telegram?: { WebApp?: WAS } }
+    ).Telegram?.WebApp;
+    const supportsSwipeApi = wa?.isVersionAtLeast?.("7.8") ?? false;
+    if (supportsSwipeApi) {
+      try {
+        wa?.disableVerticalSwipes?.();
+      } catch {
+        /* old host — safe to ignore */
+      }
+    }
+
+    const html = document.documentElement;
+    const prevOverscroll = html.style.overscrollBehavior;
+    html.style.overscrollBehavior = "none";
+
+    return () => {
+      html.style.overscrollBehavior = prevOverscroll;
+      if (supportsSwipeApi) {
+        try {
+          wa?.enableVerticalSwipes?.();
+        } catch {
+          /* fine */
+        }
+      }
+    };
+  }, []);
+
   // Hold refs to the inputs we may need to focus on validation error.
   // Cheaper and more reliable than `getElementById` (works even if the
   // form is in a portal or has duplicate ids elsewhere on the page).
