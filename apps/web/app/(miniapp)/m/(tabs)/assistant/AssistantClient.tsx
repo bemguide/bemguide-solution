@@ -29,11 +29,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { Send } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { AlertCircle, ArrowUp, Loader2, Sparkles } from "lucide-react";
 import { CrisisCard } from "@/components/poruch/CrisisCard";
 import { EmptyState } from "@/components/poruch/EmptyState";
+import { cn } from "@/lib/utils";
 import {
   AgentApiError,
   type AgentCitation,
@@ -74,6 +73,8 @@ function newId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+const TAP_STYLE = { touchAction: "manipulation" } as const;
+
 export function AssistantClient() {
   const baseUrl = useMemo(() => getAgentBaseUrl(), []);
 
@@ -86,6 +87,7 @@ export function AssistantClient() {
 
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Bootstrap: who am I? The agent backend identifies users by their
   // public.users.id UUID (== V2User.id), so we need /me before the
@@ -188,6 +190,37 @@ export function AssistantClient() {
     let convId = readConversationId(me.id);
     let attempted404Recovery = false;
 
+    // Watchdog: if no SSE event arrives within 25s of opening the
+    // request, abort. Some Telegram WebView configurations buffer
+    // streamed responses to completion (or seemingly never) — without
+    // this, the user is stuck on the typing dots forever. The error
+    // path below renders an actionable "не відповідає" message they
+    // can retry from. 25s gives Railway's worst-case dyno spin-up
+    // time (~20s on a cold start) plus a small safety margin.
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    const armWatchdog = () => {
+      clearWatchdog();
+      watchdog = setTimeout(() => {
+        watchdog = null;
+        controller.abort();
+      }, 25_000);
+    };
+    const clearWatchdog = () => {
+      if (watchdog !== null) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
+    };
+    armWatchdog();
+    let timedOut = false;
+    controller.signal.addEventListener(
+      "abort",
+      () => {
+        if (watchdog === null) timedOut = true;
+      },
+      { once: true },
+    );
+
     runStream: while (true) {
       try {
         for await (const evt of streamChat({
@@ -197,6 +230,8 @@ export function AssistantClient() {
           signal: controller.signal,
         })) {
           if (controller.signal.aborted) break runStream;
+          // Reset the watchdog on every event — the stream is alive.
+          armWatchdog();
 
           if (evt.event === "conversation") {
             convId = evt.data.conversation_id;
@@ -263,6 +298,23 @@ export function AssistantClient() {
         break runStream;
       } catch (err) {
         if ((err as { name?: string } | null)?.name === "AbortError") {
+          // Distinguish a watchdog timeout from a deliberate abort
+          // (component unmount, new send()). Watchdog → user-visible
+          // error so they can retry. Real abort → silent.
+          if (timedOut) {
+            setMessages((m) =>
+              m.map((mm) =>
+                mm.id === assistantId && mm.role === "assistant"
+                  ? {
+                      ...mm,
+                      pending: false,
+                      error:
+                        "Помічник не відповідає. Спробуй ще раз — зазвичай це проходить з другого разу.",
+                    }
+                  : mm,
+              ),
+            );
+          }
           break runStream;
         }
         if (
@@ -276,6 +328,9 @@ export function AssistantClient() {
           attempted404Recovery = true;
           clearConversationId(me.id);
           convId = null;
+          // Re-arm the watchdog for the retry — the previous timer
+          // already fired/was cleared by the catch path.
+          armWatchdog();
           continue runStream;
         }
         logApiError("assistant.stream", err);
@@ -294,6 +349,7 @@ export function AssistantClient() {
       }
     }
 
+    clearWatchdog();
     if (abortRef.current === controller) abortRef.current = null;
     setPending(false);
   }
@@ -314,18 +370,26 @@ export function AssistantClient() {
 
   function dismissCrisis() {
     setCrisis(null);
+    // Return focus to the composer so keyboard users can resume typing.
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function onPickPrompt(text: string) {
+    void send(text);
   }
 
   const composerDisabled = pending || crisis !== null;
+  const trimmedDraft = draft.trim();
+  const sendDisabled = composerDisabled || trimmedDraft.length === 0;
 
   return (
-    <main className="flex flex-1 flex-col overflow-hidden">
+    <main className="bg-background flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={scrollRef}
-        className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-4 pt-4"
+        className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-4 pt-6"
       >
         {messages.length === 0 && !crisis ? (
-          <Welcome onPick={(t) => void send(t)} />
+          <Welcome onPick={onPickPrompt} />
         ) : null}
 
         {messages.map((m) =>
@@ -339,56 +403,54 @@ export function AssistantClient() {
         {crisis ? <CrisisCard card={crisis} onDismiss={dismissCrisis} /> : null}
       </div>
 
-      <form
+      <Composer
+        value={draft}
+        onChange={setDraft}
         onSubmit={onSubmit}
-        className="bg-background/95 border-border shrink-0 border-t backdrop-blur"
-      >
-        <div className="flex items-end gap-2 px-3 py-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={
-              crisis
-                ? "Натисни «Зрозуміло» вище, коли будеш готовий."
-                : "Запитай помічника…"
-            }
-            disabled={composerDisabled}
-            rows={1}
-            className="max-h-32 min-h-[44px] flex-1 resize-none"
-          />
-          <Button
-            type="submit"
-            size="lg"
-            className="h-11 w-11 shrink-0 px-0"
-            disabled={composerDisabled || !draft.trim()}
-            aria-label="Надіслати"
-          >
-            <Send className="h-5 w-5" aria-hidden />
-          </Button>
-        </div>
-      </form>
+        onKeyDown={onKeyDown}
+        textareaRef={textareaRef}
+        disabled={composerDisabled}
+        sendDisabled={sendDisabled}
+        pending={pending}
+        placeholder={
+          crisis
+            ? "Натисни «Зрозуміло» вище, коли будеш готовий."
+            : "Запитай помічника…"
+        }
+      />
     </main>
   );
 }
 
 function Welcome({ onPick }: { onPick: (text: string) => void }) {
   return (
-    <div className="space-y-4 py-6 text-center">
-      <h1 className="text-foreground text-xl font-semibold">Помічник Поруч</h1>
-      <p className="text-muted-foreground mx-auto max-w-sm text-sm leading-relaxed">
-        Я допоможу розібратися зі статусом ветерана, пільгами, послугами Дії та
-        куди звернутись. Пиши простою мовою — українською або як тобі зручно.
-      </p>
-      <ul className="mx-auto max-w-sm space-y-2">
+    <div className="mx-auto flex w-full max-w-md flex-col items-center gap-5 pt-8 pb-2 text-center">
+      <div className="bg-primary/10 flex h-14 w-14 items-center justify-center rounded-full">
+        <Sparkles className="text-primary h-6 w-6" aria-hidden />
+      </div>
+      <div className="space-y-2">
+        <h1 className="text-foreground text-2xl font-semibold leading-tight tracking-tight">
+          Помічник Поруч
+        </h1>
+        <p className="text-muted-foreground mx-auto max-w-xs text-sm leading-relaxed">
+          Розберуся зі статусом ветерана, пільгами, послугами Дії і куди
+          звернутись. Пиши простою мовою — як тобі зручно.
+        </p>
+      </div>
+      <ul className="w-full space-y-2 pt-2 text-left">
         {DRAFT_PROMPTS.map((p) => (
           <li key={p}>
             <button
               type="button"
               onClick={() => onPick(p)}
-              className="bg-accent text-accent-foreground hover:bg-accent/80 w-full rounded-xl px-3 py-2 text-left text-sm transition-colors"
+              className="bg-card border-border text-foreground hover:border-primary/40 hover:bg-accent/30 group flex w-full items-center gap-3 rounded-xl border px-4 py-3 text-sm font-medium transition-colors"
+              style={TAP_STYLE}
             >
-              {p}
+              <Sparkles
+                className="text-primary/60 group-hover:text-primary h-4 w-4 shrink-0 transition-colors"
+                aria-hidden
+              />
+              <span className="leading-snug">{p}</span>
             </button>
           </li>
         ))}
@@ -400,7 +462,7 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line rounded-2xl rounded-br-md px-4 py-2.5 text-sm leading-relaxed">
+      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line break-words rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
         {text}
       </div>
     </div>
@@ -413,20 +475,40 @@ function AssistantBubble({
   message: Extract<ChatMessage, { role: "assistant" }>;
 }) {
   const visibleText = stripSourcesLine(message.text);
+
+  // Stream failed before any tokens streamed → render the error in
+  // place of the bubble. Don't show an empty bubble + floating error
+  // pill, that always looks broken.
+  if (message.error && !visibleText) {
+    return (
+      <div className="flex justify-start">
+        <div className="bg-destructive/10 text-destructive border-destructive/30 inline-flex max-w-[92%] items-start gap-2 rounded-2xl rounded-bl-md border px-4 py-2.5 text-sm leading-relaxed">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+          <span>{message.error}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex justify-start">
       <div className="max-w-[92%] space-y-2">
-        <div className="bg-card text-foreground border-border whitespace-pre-line rounded-2xl rounded-bl-md border px-4 py-2.5 text-sm leading-relaxed">
-          {visibleText || (message.pending ? <TypingDots /> : "")}
-          {message.pending && visibleText ? (
-            <span className="text-muted-foreground"> ▍</span>
-          ) : null}
+        <div className="bg-card text-foreground border-border whitespace-pre-line break-words rounded-2xl rounded-bl-md border px-4 py-3 text-[15px] leading-relaxed shadow-sm">
+          {visibleText ? (
+            <>
+              {visibleText}
+              {message.pending ? <Cursor /> : null}
+            </>
+          ) : (
+            <TypingDots />
+          )}
         </div>
 
         {message.error ? (
-          <div className="text-destructive bg-destructive/5 border-destructive/30 rounded-md border px-3 py-2 text-xs">
-            {message.error}
-          </div>
+          <p className="text-destructive inline-flex items-start gap-1.5 px-1 text-xs">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>{message.error}</span>
+          </p>
         ) : null}
 
         {message.citations.length > 0 ? (
@@ -437,36 +519,45 @@ function AssistantBubble({
   );
 }
 
+/** Inline cursor for in-flight streamed text. Styled span beats the
+ *  literal "▍" character — the latter has font-dependent vertical
+ *  alignment and renders thicker on Cyrillic faces. */
+function Cursor() {
+  return (
+    <span
+      aria-hidden
+      className="bg-foreground/50 ml-0.5 inline-block h-[1em] w-0.5 translate-y-[2px] animate-pulse align-middle"
+    />
+  );
+}
+
 function TypingDots() {
   return (
-    <span aria-label="Помічник друкує" className="inline-flex items-center gap-1">
-      <span className="bg-muted-foreground h-1.5 w-1.5 animate-pulse rounded-full" />
-      <span
-        className="bg-muted-foreground h-1.5 w-1.5 animate-pulse rounded-full"
-        style={{ animationDelay: "100ms" }}
-      />
-      <span
-        className="bg-muted-foreground h-1.5 w-1.5 animate-pulse rounded-full"
-        style={{ animationDelay: "200ms" }}
-      />
+    <span
+      aria-label="Помічник друкує"
+      className="inline-flex items-center gap-1 py-1.5"
+    >
+      <span className="bg-foreground/40 h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:-0.3s]" />
+      <span className="bg-foreground/40 h-1.5 w-1.5 animate-bounce rounded-full [animation-delay:-0.15s]" />
+      <span className="bg-foreground/40 h-1.5 w-1.5 animate-bounce rounded-full" />
     </span>
   );
 }
 
 function CitationsRow({ citations }: { citations: AgentCitation[] }) {
   return (
-    <div className="space-y-1.5">
-      <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
+    <div className="space-y-1.5 pl-1">
+      <p className="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">
         Джерела
       </p>
-      <ul className="space-y-1">
+      <ul className="flex flex-wrap gap-1.5">
         {citations.map((c) => (
           <li key={c.id}>
             <a
               href={c.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="bg-accent text-accent-foreground hover:bg-accent/80 inline-flex max-w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-xs leading-snug"
+              className="bg-accent text-accent-foreground hover:bg-accent/70 inline-flex max-w-[260px] items-baseline gap-1.5 rounded-md px-2 py-1 text-xs leading-snug transition-colors"
             >
               <span className="text-muted-foreground shrink-0 text-[10px] uppercase">
                 {c.kind}
@@ -477,5 +568,76 @@ function CitationsRow({ citations }: { citations: AgentCitation[] }) {
         ))}
       </ul>
     </div>
+  );
+}
+
+function Composer({
+  value,
+  onChange,
+  onSubmit,
+  onKeyDown,
+  textareaRef,
+  disabled,
+  sendDisabled,
+  pending,
+  placeholder,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: (e: FormEvent) => void;
+  onKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  disabled: boolean;
+  sendDisabled: boolean;
+  pending: boolean;
+  placeholder: string;
+}) {
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="bg-background border-border/60 shrink-0 border-t px-3 pb-3 pt-2.5"
+    >
+      <div
+        className={cn(
+          "bg-card border-border flex items-end gap-1 rounded-2xl border p-1 transition-[border-color,box-shadow]",
+          "focus-within:border-primary/40 focus-within:ring-primary/15 focus-within:ring-2",
+          disabled && "opacity-70",
+        )}
+      >
+        <textarea
+          ref={textareaRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={placeholder}
+          disabled={disabled}
+          rows={1}
+          autoComplete="off"
+          autoCapitalize="sentences"
+          enterKeyHint="send"
+          className={cn(
+            "placeholder:text-muted-foreground/80 field-sizing-content max-h-32 min-h-[36px] flex-1 resize-none bg-transparent px-3 py-2 text-[15px] leading-snug outline-none",
+            "disabled:cursor-not-allowed disabled:placeholder:text-muted-foreground/60",
+          )}
+        />
+        <button
+          type="submit"
+          disabled={sendDisabled}
+          aria-label={pending ? "Помічник відповідає" : "Надіслати"}
+          className={cn(
+            "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition-colors",
+            "bg-primary text-primary-foreground hover:bg-primary/90",
+            "disabled:bg-muted disabled:text-muted-foreground/60 disabled:hover:bg-muted",
+          )}
+          style={TAP_STYLE}
+        >
+          {pending ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : (
+            <ArrowUp className="h-4 w-4" strokeWidth={2.5} aria-hidden />
+          )}
+        </button>
+      </div>
+    </form>
   );
 }

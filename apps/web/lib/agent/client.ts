@@ -89,6 +89,11 @@ export async function* streamChat({
         conversation_id: conversationId,
         user_message: userMessage,
       }),
+      // `cache: 'no-store'` is defensive — POSTs aren't cacheable
+      // in any sane client, but Telegram's WebView has been seen to
+      // memoize fetch responses in some configs; this kills the
+      // possibility cleanly.
+      cache: "no-store",
       signal,
     });
   } catch (err) {
