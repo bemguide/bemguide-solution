@@ -136,21 +136,27 @@ const CLASSIFIED_INTEREST_SET = new Set<string>(CLASSIFIED_INTEREST_VALUES);
 // here, next to the enum, so the filter membership stays in sync if the
 // vocabulary expands.
 //
-// Note: HEALTH and REHABILITATION are intentionally disjoint — clinical
-// rehabilitation is its own user-facing category, surfaced separately
-// from medical/therapy/psychological content. A row whose classifier
-// emitted both tags (e.g. a rehab centre that also lists medical_care)
-// will appear in both filters, which is the intended UX.
+// HEALTH carries pure medicine + psychology: medical care, recovery, and
+// psychological support. Therapeutic procedures live with REHABILITATION
+// (clinical rehab + art-therapy + equine-therapy / іпотерапія) because
+// they are restorative-care procedures, not general health/wellness.
+//
+// The two filters are made mutually exclusive in routing via
+// FILTER_EXCLUDE_TAGS in feed.service.ts: a row carrying any
+// REHABILITATION_INTEREST_TAGS tag is dropped from the health response
+// even if it also carries a HEALTH tag. Without the exclusion, e.g.
+// "Іпотерапія" (`{equine_therapy, psychological_support}`) would appear
+// in both filters.
 export const HEALTH_INTEREST_TAGS: readonly ClassifiedInterest[] = [
   'recovery',
   'psychological_support',
   'medical_care',
-  'art_therapy',
-  'equine_therapy',
 ] as const;
 
 export const REHABILITATION_INTEREST_TAGS: readonly ClassifiedInterest[] = [
   'rehabilitation',
+  'art_therapy',
+  'equine_therapy',
 ] as const;
 
 export const DISCOUNT_INTEREST_TAGS: readonly ClassifiedInterest[] = [
