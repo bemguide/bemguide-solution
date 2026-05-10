@@ -1,11 +1,17 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
-import { generateAiReasons } from './gemini.service.js';
+import {
+  generateAiReasons,
+  HEALTH_INTEREST_TAGS,
+  DISCOUNT_INTEREST_TAGS,
+  type ClassifiedInterest,
+} from './gemini.service.js';
 import { getById } from './users.service.js';
 import { serializeOpportunityTimes } from '../utils/time.js';
 import type { Database } from '../types/supabase.generated.js';
 
 type OpportunityRow = Database['public']['Tables']['opportunities']['Row'];
+type OpportunityHealthRow = Database['public']['Tables']['opportunity_health']['Row'];
 
 export interface OpportunityCard extends OpportunityRow {
   match_score?: number;
@@ -15,10 +21,26 @@ export interface OpportunityCard extends OpportunityRow {
   distance_km?: number | null;
 }
 
+export interface OpportunityHealthCard extends OpportunityHealthRow {
+  match_score?: number;
+  distance_km?: number | null;
+}
+
 export interface FeedResponse {
   today_tomorrow: OpportunityCard[];
   this_week: OpportunityCard[];
   try_new: OpportunityCard[];
+}
+
+export type FeedFilter = 'health' | 'discounts';
+
+export type FeedItem =
+  | ({ source: 'opportunity' } & OpportunityCard)
+  | ({ source: 'opportunity_health' } & OpportunityHealthCard);
+
+export interface FilteredFeedResponse {
+  filter: FeedFilter;
+  items: FeedItem[];
 }
 
 const TODAY_TOMORROW_HOURS = 36;
@@ -228,4 +250,172 @@ async function decorate(
 // compare apples-to-apples. Output: "YYYY-MM-DDTHH:mm:ss" (no offset, no Z).
 function toWallClockUtc(d: Date): string {
   return d.toISOString().slice(0, 19);
+}
+
+// ---------------------------------------------------------------------------
+// Filtered feed: GET /feed?filter=health|discounts
+// ---------------------------------------------------------------------------
+//
+// Returns a flat list (no time buckets) sourced from BOTH `opportunities` and
+// `opportunity_health`, scoped to rows whose classified_interest overlaps a
+// fixed tag set:
+//   • health    → HEALTH_INTEREST_TAGS  (rehab, recovery, psych, medical, art/equine therapy)
+//   • discounts → DISCOUNT_INTEREST_TAGS (discount_promotions)
+//
+// Per-row match_score is the count of overlapping classified_interest tags
+// between the user and the row — same scoring shape as compute_match_score's
+// classified-interest path, computed inline here because opportunity_health
+// rows are not in event_matches and have no precomputed score.
+//
+// Past events (start_at < now) are excluded from the opportunities side.
+// opportunity_health rows have no schedule, so they always pass.
+//
+// Ordering: match_score desc, then start_at asc / title asc as a stable
+// tiebreaker. Cap of FILTERED_LIMIT items total after the merge.
+
+const FILTERED_LIMIT = 30;
+const FILTERED_PER_TABLE_OVERFETCH = 60;
+
+const FILTER_TAG_SETS: Record<FeedFilter, readonly ClassifiedInterest[]> = {
+  health: HEALTH_INTEREST_TAGS,
+  discounts: DISCOUNT_INTEREST_TAGS,
+};
+
+export async function buildFilteredFeed(
+  userId: string,
+  filter: FeedFilter,
+  cityFilter?: string,
+): Promise<FilteredFeedResponse> {
+  const user = await getById(userId);
+  if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
+
+  const effectiveCity = cityFilter ?? user.city ?? null;
+  const tagSet = FILTER_TAG_SETS[filter];
+  // PostgREST array-overlap filter syntax: `ov.{a,b,c}` (not quoted)
+  const tagOverlapExpr = `{${tagSet.join(',')}}`;
+
+  const userInterestsSet = new Set<string>(user.classified_interest ?? []);
+
+  // Pull opportunities + opportunity_health in parallel. Each table is
+  // overfetched and merged below so a popular tag on one side doesn't
+  // crowd out the other.
+  const wallNow = toWallClockUtc(new Date());
+
+  const oppQuery = supabaseAdmin
+    .from('opportunities')
+    .select('*')
+    .overlaps('classified_interest', tagSet as unknown as string[])
+    // Drop past events. Undated events (start_at IS NULL) always pass —
+    // they're "always-on" entries living in the events table.
+    .or(`start_at.is.null,start_at.gte.${wallNow}`)
+    .order('start_at', { ascending: true, nullsFirst: false })
+    .limit(FILTERED_PER_TABLE_OVERFETCH);
+  const oppQueryFinal = effectiveCity ? oppQuery.eq('city', effectiveCity) : oppQuery;
+
+  const healthQuery = supabaseAdmin
+    .from('opportunity_health')
+    .select('*')
+    .overlaps('classified_interest', tagSet as unknown as string[])
+    .order('title', { ascending: true })
+    .limit(FILTERED_PER_TABLE_OVERFETCH);
+  const healthQueryFinal = effectiveCity ? healthQuery.eq('city', effectiveCity) : healthQuery;
+
+  const [oppResp, healthResp] = await Promise.all([oppQueryFinal, healthQueryFinal]);
+
+  if (oppResp.error)
+    throw AppError.upstream('Failed to load filtered opportunities', oppResp.error.message);
+  if (healthResp.error)
+    throw AppError.upstream('Failed to load filtered opportunity_health', healthResp.error.message);
+
+  const oppRows = (oppResp.data ?? []) as OpportunityRow[];
+  const healthRows = (healthResp.data ?? []) as OpportunityHealthRow[];
+
+  // Decorate opportunities with attendee counts (same logic as default feed
+  // decorate(), trimmed). Skipped for opportunity_health because it has
+  // visit_count built in.
+  const oppDecorations = await decorateOpportunities(oppRows);
+
+  const oppItems: FeedItem[] = oppRows.map((o) => {
+    const dec = oppDecorations.get(o.id);
+    return {
+      source: 'opportunity' as const,
+      ...serializeOpportunityTimes(o),
+      match_score: countOverlap(userInterestsSet, o.classified_interest),
+      attendee_count: dec?.attendee_count ?? 0,
+      names_visible: dec?.names_visible ?? [],
+      distance_km: null,
+    };
+  });
+
+  const healthItems: FeedItem[] = healthRows.map((h) => ({
+    source: 'opportunity_health' as const,
+    ...h,
+    match_score: countOverlap(userInterestsSet, h.classified_interest),
+    distance_km: null,
+  }));
+
+  // Merge, sort by match_score desc + stable tiebreaker (table-side ORDER BY
+  // already gave each list a sensible secondary ordering), cap.
+  const merged: FeedItem[] = [...oppItems, ...healthItems];
+  merged.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+  return { filter, items: merged.slice(0, FILTERED_LIMIT) };
+}
+
+function countOverlap(
+  userTags: Set<string>,
+  rowTags: ClassifiedInterest[] | string[] | null,
+): number {
+  if (!rowTags || rowTags.length === 0) return 0;
+  let n = 0;
+  for (const t of rowTags) if (userTags.has(t)) n += 1;
+  return n;
+}
+
+// Slimmer decorate() variant: only attendee_count + names_visible. The full
+// decorate() in buildFeed also threads match_score through matchRows, but
+// the filtered feed computes match_score inline (we don't have event_matches
+// for opportunity_health), so that join is unnecessary here.
+async function decorateOpportunities(
+  opportunities: OpportunityRow[],
+): Promise<Map<string, { attendee_count: number; names_visible: string[] }>> {
+  const out = new Map<string, { attendee_count: number; names_visible: string[] }>();
+  if (opportunities.length === 0) return out;
+  const ids = opportunities.map((o) => o.id);
+
+  const { data: attendeesData, error: attendeesErr } = await supabaseAdmin
+    .from('event_attendees')
+    .select('event_id, status, show_name_publicly, users:user_id(display_name, show_name_publicly)')
+    .in('event_id', ids)
+    .in('status', ['joining', 'attended']);
+  if (attendeesErr)
+    throw AppError.upstream('Failed to load attendee decoration', attendeesErr.message);
+
+  const counts = new Map<string, number>();
+  const names = new Map<string, string[]>();
+  type AttendeeRow = {
+    event_id: string;
+    status: string;
+    show_name_publicly: boolean;
+    users: { display_name: string | null; show_name_publicly: boolean } | null;
+  };
+  for (const row of (attendeesData ?? []) as unknown as AttendeeRow[]) {
+    counts.set(row.event_id, (counts.get(row.event_id) ?? 0) + 1);
+    const eventOptIn = row.show_name_publicly === true;
+    const userOptIn = row.users?.show_name_publicly === true;
+    if (eventOptIn && userOptIn && row.users?.display_name) {
+      const list = names.get(row.event_id) ?? [];
+      if (list.length < NAMES_VISIBLE_MAX) {
+        list.push(row.users.display_name);
+        names.set(row.event_id, list);
+      }
+    }
+  }
+
+  for (const o of opportunities) {
+    out.set(o.id, {
+      attendee_count: counts.get(o.id) ?? 0,
+      names_visible: names.get(o.id) ?? [],
+    });
+  }
+  return out;
 }
