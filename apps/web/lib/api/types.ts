@@ -52,6 +52,44 @@ export type IdentityPref =
   | "mixed_with_women_emphasis"
   | "family_friendly";
 
+/**
+ * Backend's controlled-vocabulary tag set, populated by the Gemini classifier
+ * on opportunity inserts/updates and on user onboarding answers. Use these
+ * (not the legacy free-form `interests: string[]`) for matching, filtering,
+ * and chips on cards.
+ */
+export type ClassifiedInterest =
+  // Physical / movement
+  | "physical_sport"
+  | "adaptive_sport"
+  | "equine_therapy"
+  | "outdoor_recreation"
+  // Creative / cultural
+  | "art_therapy"
+  | "music"
+  | "creative_workshop"
+  | "cultural_event"
+  // Health / therapy
+  | "rehabilitation"
+  | "recovery"
+  | "psychological_support"
+  | "medical_care"
+  // Practical / life
+  | "legal_aid"
+  | "education"
+  | "career_development"
+  | "employment"
+  | "financial_aid"
+  | "discount_promotions"
+  // Social
+  | "support_group"
+  | "community_meetup"
+  | "family_support"
+  | "women_support";
+
+/** Narrow enum used only on `opportunity_health.interests`. */
+export type HealthInterest = "rehabilitation" | "recovery" | "healing";
+
 export type InvitationDeliveryStatus = "pending" | "sent" | "failed" | "cancelled";
 export type InvitationResponse = "accepted" | "declined" | "ignored";
 export type AttendeeStatus = "joining" | "attended" | "no_show" | "left";
@@ -97,8 +135,11 @@ export type V2Opportunity = {
   duration_min: number | null;
   /** Generated column = start_at + duration_min. Read-only. Same offset. */
   ends_at: string | null;
-  /** Free-form interest tags — backend stores `text[]`, no enum gate. */
+  /** Legacy free-form interest tags — kept for audit. Use
+   *  `classified_interest` for any matching/filtering/UX. */
   interests: string[];
+  /** Controlled-vocabulary tags assigned by the backend's classifier. */
+  classified_interest: ClassifiedInterest[];
   accessibility_flags: AccessibilityFlag[];
   price_uah: number | null;
   organizer_contact: string | null;
@@ -107,6 +148,42 @@ export type V2Opportunity = {
   target_identity_pref: IdentityPref;
   /** [] = no preference. Multi-select. */
   target_veteran_status: VeteranStatus[];
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Static health resource (rehab clinic, support center, etc.) — sibling
+ * table to `opportunities`. Always-on, no `start_at`/`ends_at`/`duration_min`
+ * and no RSVP. Surfaces only via `GET /feed?filter=health`.
+ */
+export type V2OpportunityHealth = {
+  id: string;
+  /** Discriminator on the row itself; only one value today, kept for
+   *  future expansion (e.g. `mobile_clinic`). */
+  type: "static";
+  title: string;
+  short_description: string | null;
+  description: string | null;
+  photo_url: string | null;
+  city: string;
+  oblast: string | null;
+  address: string | null;
+  location_lat: number;
+  location_lng: number;
+  /** Narrow vocabulary scoped to the health domain. */
+  interests: HealthInterest[];
+  /** Same global classifier output as opportunities. */
+  classified_interest: ClassifiedInterest[];
+  accessibility_flags: AccessibilityFlag[];
+  target_age_range: AgeRange[];
+  target_identity_pref: IdentityPref;
+  target_veteran_status: VeteranStatus[];
+  price_uah: number | null;
+  organizer_contact: string | null;
+  /** Aggregate visit counter, not per-user. Increments via a future
+   *  POST endpoint we don't consume yet. */
+  visit_count: number;
   created_at: string;
   updated_at: string;
 };
@@ -172,10 +249,38 @@ export type OpportunityCard = V2Opportunity & {
   distance_km?: number | null;
 };
 
+/** Static-resource decorated card. No `ai_reason` — see backend doc. */
+export type OpportunityHealthCard = V2OpportunityHealth & {
+  /** Count of `classified_interest` overlap with the user. 0..4. */
+  match_score?: number;
+  /** Always `null` on the wire — frontend computes. */
+  distance_km?: number | null;
+};
+
 export type FeedSections = {
   today_tomorrow: OpportunityCard[];
   this_week: OpportunityCard[];
   try_new: OpportunityCard[];
+};
+
+/** Alias for the spec's name; same shape as FeedSections. */
+export type FeedResponse = FeedSections;
+
+/** Filter slug accepted by `GET /feed?filter=…`. */
+export type FeedFilter = "health" | "discounts";
+
+/**
+ * Discriminated union — `source` tells the renderer which card to use.
+ * `opportunity_health` rows have no schedule and no RSVP; pick the right
+ * card per `source` instead of trying to unify the two shapes.
+ */
+export type FeedItem =
+  | ({ source: "opportunity" } & OpportunityCard)
+  | ({ source: "opportunity_health" } & OpportunityHealthCard);
+
+export type FilteredFeedResponse = {
+  filter: FeedFilter;
+  items: FeedItem[];
 };
 
 export type AuthExchangeResponse = {

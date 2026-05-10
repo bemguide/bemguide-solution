@@ -1,30 +1,27 @@
-// /m/feed — miniapp home. Stale-while-revalidate against the v2
-// backend so the page paints instantly on return visits and never
-// leaves the user staring at a full-page skeleton:
+// /m/feed — miniapp home. Three tabs across the same `/feed` endpoint:
 //
-//   1. On mount, read the localStorage cache and seed state from it.
-//      First paint is the previous successful feed (or the empty
-//      state / skeleton if no cache).
-//   2. Fire `getCurrentUser()` and `getFeed()` in parallel (the
-//      backend defaults to the user's stored city when ?city is
-//      omitted, so /feed doesn't need to wait on /me).
-//   3. When fresh data arrives, swap state and write the cache. On
-//      failure, keep the stale data — only swap to an error UI when
-//      we have nothing at all.
+//   "Все"     → `getFeed()`              → today_tomorrow / this_week / try_new
+//   "Здоровʼя" → `getFeed({ filter: 'health' })`     → flat list, mixed sources
+//   "Знижки"  → `getFeed({ filter: 'discounts' })`   → flat list, mixed sources
 //
-// Empty backend → instant empty-state once data arrives (no spinner
-// detour). Telegram-not-loaded → "Open in Telegram" CTA. The page
-// has no top header — the bottom tab bar identifies which screen
-// you're on, so a duplicate "Поруч" title up top would just eat
-// vertical space.
+// Filtered tabs return `FeedItem`s that can be either `opportunity`
+// (event card with RSVP + start_at) or `opportunity_health` (always-on
+// place card with map link + visit_count). The `source` discriminator
+// picks which card renders.
+//
+// Default tab keeps the localStorage stale-while-revalidate dance from
+// before. Filtered tabs fetch fresh on switch — they're lighter and
+// less worth caching.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
+import { PlaceCard } from "@/components/poruch/PlaceCard";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   describeError,
   getCurrentUser,
@@ -34,9 +31,12 @@ import {
   opportunityToDisplay,
   readFeedCache,
   writeFeedCache,
-  type FeedSections as V2FeedSections,
+  type FeedItem,
+  type FeedResponse,
 } from "@/lib/api";
 import type { EventForDisplay } from "@/lib/types";
+
+type Tab = "all" | "health" | "discounts";
 
 type DisplaySections = {
   today_tomorrow: EventForDisplay[];
@@ -44,7 +44,7 @@ type DisplaySections = {
   try_new: EventForDisplay[];
 };
 
-function adapt(sections: V2FeedSections): DisplaySections {
+function adapt(sections: FeedResponse): DisplaySections {
   return {
     today_tomorrow: sections.today_tomorrow.map(opportunityToDisplay),
     this_week: sections.this_week.map(opportunityToDisplay),
@@ -52,23 +52,30 @@ function adapt(sections: V2FeedSections): DisplaySections {
   };
 }
 
+const TAB_LABEL: Record<Tab, string> = {
+  all: "Все",
+  health: "Здоровʼя",
+  discounts: "Знижки",
+};
+
+const chipItemClasses =
+  "h-9 rounded-full border bg-card text-foreground px-4 text-sm font-medium normal-case tracking-normal hover:bg-card hover:border-primary/40 data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground";
+
 export function FeedClient() {
-  // Initial state must match server-render output to avoid hydration
-  // mismatches: localStorage isn't available during SSR, so reading
-  // the cache here would diverge from the server's null. Cache reads
-  // happen in useEffect (after mount) — costs us one extra render
-  // when there is a cache, but keeps SSR and the first client paint
-  // structurally identical.
+  const [tab, setTab] = useState<Tab>("all");
+
+  // Default-tab state (cached, sticky across remounts).
   const [sections, setSections] = useState<DisplaySections | null>(null);
   const [city, setCity] = useState<string | undefined>(undefined);
-  const [error, setError] = useState<string | null>(null);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
 
+  // Filtered-tab state (per filter; refetched on switch).
+  const [filtered, setFiltered] = useState<FeedItem[] | null>(null);
+  const [filteredLoading, setFilteredLoading] = useState(false);
+  const [filteredError, setFilteredError] = useState<string | null>(null);
+
+  // Default tab — runs once on mount, mirrors the previous behaviour.
   useEffect(() => {
-    // No `ranRef` guard — see MeClient for the same fix; the
-    // useRef-backed flag persisted across React strict-mode
-    // unmount/remount and silently skipped the second mount,
-    // leaving the page stuck on the cached/skeleton view until
-    // a manual reload.
     let cancelled = false;
     const startedAt = performance.now();
 
@@ -87,10 +94,9 @@ export function FeedClient() {
         if (cancelled) return;
 
         const myCity = me?.city ?? cached?.city;
-        const fresh = adapt(v2);
         setCity(myCity ?? undefined);
-        setSections(fresh);
-        setError(null);
+        setSections(adapt(v2));
+        setDefaultError(null);
         writeFeedCache({ sections: v2, city: myCity ?? undefined });
 
         if (process.env.NODE_ENV !== "production") {
@@ -105,8 +111,8 @@ export function FeedClient() {
         if (cancelled) return;
         logApiError("feed", e);
         if (!cached) {
-          if (isNoTelegramEnv(e)) setError("no_telegram_environment");
-          else setError(describeError(e, "feed"));
+          if (isNoTelegramEnv(e)) setDefaultError("no_telegram_environment");
+          else setDefaultError(describeError(e, "feed"));
         }
       }
     }
@@ -116,59 +122,144 @@ export function FeedClient() {
     };
   }, []);
 
-  if (!sections && error === "no_telegram_environment") {
+  // Filtered tabs — refetch when the user switches to one.
+  useEffect(() => {
+    if (tab === "all") return;
+    let cancelled = false;
+    setFilteredLoading(true);
+    setFilteredError(null);
+    void (async () => {
+      try {
+        const res = await getFeed({ filter: tab });
+        if (cancelled) return;
+        setFiltered(res.items);
+
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(`[feed] filter=${tab} returned ${res.items.length} items`);
+        }
+      } catch (e) {
+        if (cancelled) return;
+        logApiError(`feed.${tab}`, e);
+        if (isNoTelegramEnv(e)) setFilteredError("no_telegram_environment");
+        else setFilteredError(describeError(e, "feed"));
+      } finally {
+        if (!cancelled) setFilteredLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
+  // The "Open in Telegram" CTA preempts everything else.
+  const noTg =
+    defaultError === "no_telegram_environment" ||
+    filteredError === "no_telegram_environment";
+  if (noTg && !sections && !filtered) {
     return <OpenInTelegramScreen />;
   }
 
+  return (
+    <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
+      <FilterTabs tab={tab} onChange={setTab} />
+
+      {tab === "all" ? (
+        <DefaultBody
+          sections={sections}
+          city={city}
+          error={defaultError === "no_telegram_environment" ? null : defaultError}
+        />
+      ) : (
+        <FilteredBody
+          tab={tab}
+          items={filtered}
+          loading={filteredLoading}
+          error={
+            filteredError === "no_telegram_environment" ? null : filteredError
+          }
+          city={city}
+        />
+      )}
+    </main>
+  );
+}
+
+function FilterTabs({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
+  return (
+    <ToggleGroup
+      type="single"
+      spacing={2}
+      value={tab}
+      onValueChange={(v) => v && onChange(v as Tab)}
+      className="flex flex-wrap"
+    >
+      {(Object.keys(TAB_LABEL) as Tab[]).map((t) => (
+        <ToggleGroupItem
+          key={t}
+          value={t}
+          variant="outline"
+          className={chipItemClasses}
+          aria-label={TAB_LABEL[t]}
+        >
+          {TAB_LABEL[t]}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
+  );
+}
+
+function DefaultBody({
+  sections,
+  city,
+  error,
+}: {
+  sections: DisplaySections | null;
+  city: string | undefined;
+  error: string | null;
+}) {
   if (!sections && error) {
     return (
-      <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
-        <EmptyState
-          title="Не вдалось завантажити стрічку"
-          body={error}
-          action={
-            <Link
-              href="/m/feed"
-              className="text-primary text-sm underline-offset-2 hover:underline"
-            >
-              Спробувати ще
-            </Link>
-          }
-        />
-      </main>
+      <EmptyState
+        title="Не вдалось завантажити стрічку"
+        body={error}
+        action={
+          <Link
+            href="/m/feed"
+            className="text-primary text-sm underline-offset-2 hover:underline"
+          >
+            Спробувати ще
+          </Link>
+        }
+      />
     );
   }
 
-  if (!sections) {
-    return (
-      <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
-        <FeedSkeleton />
-      </main>
-    );
-  }
+  if (!sections) return <FeedSkeleton />;
 
   const empty =
     sections.today_tomorrow.length === 0 &&
     sections.this_week.length === 0 &&
     sections.try_new.length === 0;
 
-  return (
-    <main className="flex flex-1 flex-col gap-6 overflow-y-auto px-4 pb-6 pt-4">
-      {empty ? (
-        <EmptyState
-          title="Поки що небагато подій"
-          body={`У ${city ?? "твоєму місті"} зараз небагато подій. Подивись на мапі або запропонуй свою.`}
-          action={
-            <Link
-              href="/m/propose"
-              className="bg-primary text-primary-foreground inline-flex h-10 items-center justify-center rounded-md px-4 text-sm font-semibold"
-            >
-              Запропонувати
-            </Link>
-          }
-        />
-      ) : null}
+  if (empty) {
+    return (
+      <EmptyState
+        title="Поки що небагато подій"
+        body={`У ${city ?? "твоєму місті"} зараз небагато подій. Подивись на мапі або запропонуй свою.`}
+        action={
+          <Link
+            href="/m/propose"
+            className="bg-primary text-primary-foreground inline-flex h-10 items-center justify-center rounded-md px-4 text-sm font-semibold"
+          >
+            Запропонувати
+          </Link>
+        }
+      />
+    );
+  }
 
+  return (
+    <div className="flex flex-col gap-6">
       {sections.today_tomorrow.length > 0 ? (
         <section className="space-y-3">
           <SectionHeader title="Сьогодні і завтра поруч" />
@@ -204,7 +295,65 @@ export function FeedClient() {
           </div>
         </section>
       ) : null}
-    </main>
+    </div>
+  );
+}
+
+function FilteredBody({
+  tab,
+  items,
+  loading,
+  error,
+  city,
+}: {
+  tab: Tab;
+  items: FeedItem[] | null;
+  loading: boolean;
+  error: string | null;
+  city: string | undefined;
+}) {
+  if (loading && !items) return <FeedSkeleton />;
+
+  if (error && !items) {
+    return (
+      <EmptyState
+        title="Не вдалось завантажити"
+        body={error}
+        action={
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="text-primary text-sm underline-offset-2 hover:underline"
+          >
+            Спробувати ще
+          </button>
+        }
+      />
+    );
+  }
+
+  if (!items || items.length === 0) {
+    const tip =
+      tab === "health"
+        ? `У ${city ?? "твоєму місті"} зараз немає ресурсів зі здоровʼя. Спробуй іншу вкладку.`
+        : `У ${city ?? "твоєму місті"} зараз немає актуальних знижок. Спробуй пізніше.`;
+    return <EmptyState title="Поки що порожньо" body={tip} />;
+  }
+
+  return (
+    <div className="space-y-3">
+      {items.map((item) =>
+        item.source === "opportunity" ? (
+          <FeaturedEventCard
+            key={`opp-${item.id}`}
+            event={opportunityToDisplay(item)}
+            surface="miniapp"
+          />
+        ) : (
+          <PlaceCard key={`place-${item.id}`} place={item} />
+        ),
+      )}
+    </div>
   );
 }
 
