@@ -14,6 +14,12 @@ export const env = {
   tgBotToken: () => requireEnv("TELEGRAM_BOT_TOKEN"),
   tgBotUsername: () => requireEnv("TELEGRAM_BOT_USERNAME"),
   tgWebhookSecret: () => requireEnv("TELEGRAM_WEBHOOK_SECRET"),
-  publicAppUrl: () => requireEnv("NEXT_PUBLIC_APP_URL"),
+  // Trailing-slash-tolerant: callers concatenate `${APP_URL}/m/...`,
+  // so a stored value like `https://example.com/` would otherwise
+  // produce `https://example.com//m/onboarding`. Browsers usually
+  // normalise `//` in the path, but Telegram Mini App's URL allowlist
+  // and our own server-side Link components are stricter — strip it
+  // here so every consumer sees the canonical form.
+  publicAppUrl: () => requireEnv("NEXT_PUBLIC_APP_URL").replace(/\/+$/, ""),
   cronSecret: () => requireEnv("VERCEL_CRON_SECRET"),
 };

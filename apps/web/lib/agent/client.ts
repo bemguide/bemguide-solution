@@ -54,6 +54,16 @@ function authQueryString(userId: string): string {
   return `user_id=${encodeURIComponent(userId)}`;
 }
 
+// SSE frame boundary. Per the spec, lines may end with `\r\n`, `\n`, or
+// bare `\r`, and a frame is terminated by a blank line — so the
+// separator can be `\r\n\r\n`, `\n\n`, or `\r\r`. sse-starlette (what
+// bemguide-chat uses) emits `\r\n\r\n`; if we only searched for `\n\n`
+// the parser would never find a boundary, the buffer would grow
+// without ever yielding an event, and the user would sit on typing
+// dots until the watchdog fires and the same broken parser ran again
+// in buffered mode.
+const SSE_FRAME_SEP = /\r\n\r\n|\n\n|\r\r/;
+
 // ----------------------------------------------------------------
 // SSE stream — POST /v1/agent/messages
 // ----------------------------------------------------------------
@@ -138,15 +148,20 @@ export async function* streamChat({
 
       // Frames are separated by a blank line. Each frame is one or
       // more `event:`/`data:` lines. We only honour the standard
-      // pair; anything else is a forward-compat no-op.
-      let sep: number;
-      while ((sep = buffer.indexOf("\n\n")) !== -1) {
-        const frame = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+      // pair; anything else is a forward-compat no-op. The separator
+      // regex handles both CRLF (sse-starlette / FastAPI) and LF
+      // (some Node servers) — see SSE_FRAME_SEP comment.
+      let m: RegExpExecArray | null;
+      while ((m = SSE_FRAME_SEP.exec(buffer)) !== null) {
+        const frame = buffer.slice(0, m.index);
+        buffer = buffer.slice(m.index + m[0].length);
 
         let eventName = "message";
         let dataLine = "";
         for (const line of frame.split("\n")) {
+          // Lines from a CRLF stream end with `\r`; the prefix check
+          // ignores it, and `slice(N).trim()` below strips it from
+          // the value side.
           if (line.startsWith("event:")) {
             eventName = line.slice(6).trim();
           } else if (line.startsWith("data:")) {
@@ -251,7 +266,10 @@ export async function* streamChatBuffered({
   const text = await resp.text();
   // Parse the same `event:` / `data:` framing the streaming path
   // walks — the body shape is identical, we just got it all at once.
-  for (const rawFrame of text.split("\n\n")) {
+  // SSE_FRAME_SEP is CRLF-tolerant; splitting on bare `\n\n` would
+  // collapse the entire body into a single "frame" for sse-starlette
+  // output and lose every event.
+  for (const rawFrame of text.split(SSE_FRAME_SEP)) {
     const frame = rawFrame.trim();
     if (!frame) continue;
 

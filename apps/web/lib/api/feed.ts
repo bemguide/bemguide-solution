@@ -14,31 +14,37 @@
 
 import { apiFetch } from "./client";
 import type {
-  FeedFilter,
   FeedResponse,
   FilteredFeedResponse,
   OpportunityCard,
+  ProgramsFeedResponse,
 } from "./types";
 
 const FEED = "/feed";
 const OPPORTUNITY = (id: string) => `/opportunities/${id}`;
 const ATTENDEES = (id: string) => `/opportunities/${id}/attendees`;
 
-// Overloaded: pass `filter` and you get the filtered shape;
-// omit it and you get the default 3-bucket shape. The two paths
-// hit the same `/feed` route — the param is what flips the
-// response shape on the backend.
+/**
+ * `GET /feed` returns one of three shapes depending on `filter`:
+ *   - omitted        → `FeedResponse` (today_tomorrow / this_week / try_new)
+ *   - `health` |
+ *     `discounts`    → `FilteredFeedResponse` (mixed `FeedItem[]`)
+ *   - `programs`     → `ProgramsFeedResponse` (program cards + hotlines)
+ *
+ * Callers should use the dedicated `getProgramsFeed()` for the third
+ * shape; `getFeed()` overload-narrows the first two.
+ */
 export function getFeed(opts?: {
   city?: string;
   signal?: AbortSignal;
 }): Promise<FeedResponse>;
 export function getFeed(opts: {
-  filter: FeedFilter;
+  filter: "health" | "discounts";
   city?: string;
   signal?: AbortSignal;
 }): Promise<FilteredFeedResponse>;
 export function getFeed(opts?: {
-  filter?: FeedFilter;
+  filter?: "health" | "discounts";
   city?: string;
   signal?: AbortSignal;
 }): Promise<FeedResponse | FilteredFeedResponse> {
@@ -47,6 +53,27 @@ export function getFeed(opts?: {
   if (opts?.city) params.set("city", opts.city);
   const tail = params.toString();
   return apiFetch(tail ? `${FEED}?${tail}` : FEED, { signal: opts?.signal });
+}
+
+/**
+ * `GET /feed?filter=programs` — государственные программы для ветеранов.
+ *
+ * Server-side scoping (UI does NOT need to re-filter):
+ *   - eligibility:  `target_veteran_status && [user.veteran_status]`
+ *                   (when `user.veteran_status` is null, EVERY program returns)
+ *   - city:         state-wide rows (`city IS NULL`) always; city-specific
+ *                   rows only when they match the resolved city.
+ *
+ * Items arrive sorted by `program_category ASC, title ASC`. Hotlines are
+ * always present, sorted by `display_order ASC`.
+ */
+export function getProgramsFeed(opts?: {
+  city?: string;
+  signal?: AbortSignal;
+}): Promise<ProgramsFeedResponse> {
+  const params = new URLSearchParams({ filter: "programs" });
+  if (opts?.city) params.set("city", opts.city);
+  return apiFetch(`${FEED}?${params.toString()}`, { signal: opts?.signal });
 }
 
 /**

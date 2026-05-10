@@ -341,7 +341,7 @@ async function verify() {
 // ----------------------------------------------------------------
 
 async function main() {
-  console.log(`Поруч seed → ${supabaseUrl}\n`);
+  console.log(`Просвіт seed → ${supabaseUrl}\n`);
   await cleanSeed();
   await seedCities();
   const orgIds = await seedOrganizations();

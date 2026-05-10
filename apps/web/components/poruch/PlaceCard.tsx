@@ -9,12 +9,12 @@
 // the place's info without leaving the app. The detail page now
 // owns the maps action via a "Маршрут" button.
 
-import Image from "next/image";
 import Link from "next/link";
 import { MapPin, Users } from "lucide-react";
 import { ACCESSIBILITY_LABELS_UK } from "@poruch/shared";
 import type { OpportunityHealthCard } from "@/lib/api";
 import { Autolink } from "./Autolink";
+import { RemoteImage } from "./RemoteImage";
 
 export function PlaceCard({ place }: { place: OpportunityHealthCard }) {
   return (
@@ -24,13 +24,7 @@ export function PlaceCard({ place }: { place: OpportunityHealthCard }) {
     >
       {place.photo_url ? (
         <div className="bg-muted relative aspect-[16/9] w-full">
-          <Image
-            src={place.photo_url}
-            alt={place.title}
-            fill
-            sizes="(max-width: 768px) 100vw, 480px"
-            className="object-cover"
-          />
+          <RemoteImage src={place.photo_url} alt={place.title} />
         </div>
       ) : null}
       <div className="space-y-2 p-3">

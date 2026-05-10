@@ -2,7 +2,7 @@
   "name": "poruch",
   "version": "0.1.0",
   "private": true,
-  "description": "Поруч — Telegram Mini App + web platform that helps Ukrainian veterans find local events and community.",
+  "description": "Просвіт — Telegram Mini App + web platform that helps Ukrainian veterans find local events and community.",
   "scripts": {
     "dev": "pnpm --filter @poruch/web dev",
     "build": "pnpm --filter @poruch/web build",

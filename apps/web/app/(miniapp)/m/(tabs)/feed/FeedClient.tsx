@@ -43,6 +43,7 @@ import {
   type V2User,
 } from "@/lib/api";
 import { loadHealthPrefs } from "@/lib/app-prefs";
+import { listBookmarks } from "@/lib/bookmarks";
 import type { EventForDisplay } from "@/lib/types";
 
 type Tab = "all" | "health" | "discounts" | "programs";
@@ -512,6 +513,51 @@ function FilteredBody({
   );
 }
 
+// Sub-filter inside the Програми tab. "all" shows the full grouped
+// list (the original behaviour); a category shows just that section
+// flat, no heading; "saved" pulls every program the user bookmarked
+// across categories. Persisted to localStorage so a returning user
+// lands on whatever they were looking at last time.
+type ProgramFilter = ProgramCategory | "all" | "saved";
+
+const PROGRAM_FILTER_PREF_KEY = "poruch.programs.last_filter.v1";
+const PROGRAM_FILTER_LABEL: Record<ProgramFilter, string> = {
+  all: "Все",
+  health: "Здоров'я",
+  money: "Гроші",
+  housing: "Житло",
+  education_work: "Освіта і робота",
+  sport_recreation: "Спорт",
+  support: "Підтримка",
+  saved: "Збережені",
+};
+
+const PROGRAM_FILTER_ORDER: ProgramFilter[] = [
+  "all",
+  "saved",
+  ...PROGRAM_CATEGORY_ORDER,
+];
+
+function loadProgramFilter(): ProgramFilter {
+  if (typeof window === "undefined") return "all";
+  try {
+    const stored = window.localStorage.getItem(PROGRAM_FILTER_PREF_KEY);
+    if (stored && stored in PROGRAM_FILTER_LABEL) return stored as ProgramFilter;
+  } catch {
+    /* private mode etc. */
+  }
+  return "all";
+}
+
+function saveProgramFilter(filter: ProgramFilter): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(PROGRAM_FILTER_PREF_KEY, filter);
+  } catch {
+    /* non-fatal */
+  }
+}
+
 function ProgramsBody({
   data,
   loading,
@@ -528,6 +574,22 @@ function ProgramsBody({
    */
   veteranStatusKnown: boolean;
 }) {
+  // Lazy initialiser keeps the localStorage read off the server-side
+  // render and out of every parent re-render after mount.
+  const [filter, setFilterState] = useState<ProgramFilter>(loadProgramFilter);
+  const setFilter = (next: ProgramFilter) => {
+    setFilterState(next);
+    saveProgramFilter(next);
+  };
+
+  // Saved-IDs snapshot. Refreshed on filter switch so toggling a
+  // bookmark on a card and then opening "Збережені" reflects reality
+  // even though localStorage isn't reactive on its own.
+  const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    if (filter === "saved") setSavedIds(new Set(listBookmarks("program")));
+  }, [filter]);
+
   if (loading && !data) return <FeedSkeleton />;
 
   if (error && !data) {
@@ -550,7 +612,17 @@ function ProgramsBody({
 
   if (!data) return <FeedSkeleton />;
 
-  const grouped = groupByCategory(data.items);
+  // Apply the sub-filter. We always render the chips so the user
+  // can switch back to "Все" from an empty filtered state.
+  let visibleItems: ProgramFeedItem[];
+  if (filter === "all") {
+    visibleItems = data.items;
+  } else if (filter === "saved") {
+    visibleItems = data.items.filter((p) => savedIds.has(p.id));
+  } else {
+    visibleItems = data.items.filter((p) => p.program_category === filter);
+  }
+  const grouped = groupByCategory(visibleItems);
 
   return (
     <div className="space-y-6">
@@ -558,6 +630,8 @@ function ProgramsBody({
         title="Безкоштовні державні програми"
         subtitle="Що вже доступне ветеранам — без черг, з лінком на офіційне джерело."
       />
+
+      <ProgramFilterChips active={filter} onChange={setFilter} />
 
       {!veteranStatusKnown ? (
         <Link
@@ -571,12 +645,24 @@ function ProgramsBody({
         </Link>
       ) : null}
 
-      {data.items.length === 0 ? (
+      {visibleItems.length === 0 ? (
         <EmptyState
-          title="Поки що нічого не підходить"
-          body="Спробуй пізніше або глянь гарячі лінії нижче — там підкажуть, куди звернутися."
+          title={
+            filter === "saved"
+              ? "Тут поки що порожньо"
+              : "Поки що нічого не підходить"
+          }
+          body={
+            filter === "saved"
+              ? "Збережи програму на картці — вона з'явиться тут."
+              : "Спробуй іншу категорію або глянь гарячі лінії нижче."
+          }
         />
-      ) : (
+      ) : filter === "all" ? (
+        // The grouped view stays for "all" so users see the
+        // category structure and can browse top-down. Filtered views
+        // collapse to a flat list — the chip already names the
+        // category, so a heading would just repeat it.
         PROGRAM_CATEGORY_ORDER.filter(
           (c) => (grouped.get(c)?.length ?? 0) > 0,
         ).map((category) => (
@@ -591,10 +677,47 @@ function ProgramsBody({
             </div>
           </section>
         ))
+      ) : (
+        <div className="space-y-3">
+          {visibleItems.map((p) => (
+            <ProgramCard key={p.id} program={p} />
+          ))}
+        </div>
       )}
 
       <HotlinesBlock hotlines={data.hotlines} />
     </div>
+  );
+}
+
+function ProgramFilterChips({
+  active,
+  onChange,
+}: {
+  active: ProgramFilter;
+  onChange: (next: ProgramFilter) => void;
+}) {
+  return (
+    <ToggleGroup
+      type="single"
+      spacing={2}
+      value={active}
+      onValueChange={(v) => v && onChange(v as ProgramFilter)}
+      className="flex flex-wrap"
+      aria-label="Фільтр програм"
+    >
+      {PROGRAM_FILTER_ORDER.map((f) => (
+        <ToggleGroupItem
+          key={f}
+          value={f}
+          variant="outline"
+          className={chipItemClasses}
+          aria-label={PROGRAM_FILTER_LABEL[f]}
+        >
+          {PROGRAM_FILTER_LABEL[f]}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
   );
 }
 

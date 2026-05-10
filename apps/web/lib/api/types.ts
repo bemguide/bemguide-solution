@@ -275,7 +275,7 @@ export type FeedSections = {
 export type FeedResponse = FeedSections;
 
 /** Filter slug accepted by `GET /feed?filter=…`. */
-export type FeedFilter = "health" | "discounts";
+export type FeedFilter = "health" | "discounts" | "programs";
 
 /**
  * Discriminated union — `source` tells the renderer which card to use.
@@ -287,8 +287,62 @@ export type FeedItem =
   | ({ source: "opportunity_health" } & OpportunityHealthCard);
 
 export type FilteredFeedResponse = {
-  filter: FeedFilter;
+  filter: "health" | "discounts";
   items: FeedItem[];
+};
+
+// ---------------------------------------------------------------
+// `GET /feed?filter=programs` — государственные программы
+// ---------------------------------------------------------------
+// See docs/PROGRAMS_FEED_CONTRACT.md for the wire contract. Items
+// are pre-filtered server-side by the user's veteran_status; the UI
+// groups them by program_category for display and renders the
+// always-present hotlines as a footer list.
+
+export type ProgramCategory =
+  | "health"
+  | "money"
+  | "housing"
+  | "education_work"
+  | "sport_recreation"
+  | "support";
+
+export type ProgramFeedItem = {
+  source: "opportunity_program";
+
+  id: string;
+  created_at: string;
+  updated_at: string;
+
+  title: string;
+  short_description: string;
+  how_to_apply: string | null;
+  source_url: string;
+  source_label: string | null;
+
+  program_category: ProgramCategory;
+  target_veteran_status: VeteranStatus[];
+
+  city: string | null;
+  oblast: string | null;
+  address: string | null;
+  location_lat: number | null;
+  location_lng: number | null;
+};
+
+export type HotlineItem = {
+  id: string;
+  label: string;
+  phone: string;
+  description: string | null;
+  display_order: number;
+  created_at: string;
+};
+
+export type ProgramsFeedResponse = {
+  filter: "programs";
+  items: ProgramFeedItem[];
+  hotlines: HotlineItem[];
 };
 
 export type AuthExchangeResponse = {

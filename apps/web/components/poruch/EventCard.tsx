@@ -5,11 +5,11 @@
 // - mini: text-only, for share previews / map info windows.
 
 import Link from "next/link";
-import Image from "next/image";
 import type { EventForDisplay } from "@/lib/types";
 import { formatRelativeWhen, formatDistance, formatPrice } from "@/lib/format";
 import { AccessibilityChips } from "./AccessibilityStrip";
 import { AiReasonChip } from "./AiReasonChip";
+import { RemoteImage } from "./RemoteImage";
 import { SocialProofLine } from "./SocialProofLine";
 
 type CardLink = { href: string; prefetch?: boolean };
@@ -35,16 +35,7 @@ export function FeaturedEventCard({
       className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
     >
       <div className="bg-muted relative aspect-[16/9] w-full">
-        {event.photo_url ? (
-          <Image
-            src={event.photo_url}
-            alt={event.title}
-            fill
-            sizes="(max-width: 768px) 100vw, 480px"
-            className="object-cover"
-            priority={priority}
-          />
-        ) : null}
+        <RemoteImage src={event.photo_url} alt={event.title} priority={priority} />
       </div>
       <div className="space-y-2 p-3">
         <div className="space-y-1">
@@ -94,16 +85,7 @@ export function CompactEventCard({
       className="bg-card border-border focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-2.5 transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
     >
       <div className="bg-muted relative h-20 w-20 shrink-0 overflow-hidden rounded-md">
-        {event.photo_url ? (
-          <Image
-            src={event.photo_url}
-            alt=""
-            fill
-            sizes="80px"
-            className="object-cover"
-            aria-hidden
-          />
-        ) : null}
+        <RemoteImage src={event.photo_url} alt={event.title} ariaHidden />
       </div>
       <div className="min-w-0 flex-1 space-y-1">
         <h4 className="text-foreground line-clamp-2 text-sm font-semibold leading-snug">

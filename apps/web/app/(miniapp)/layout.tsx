@@ -10,7 +10,7 @@ import { ApplyAppPrefs } from "@/components/poruch/ApplyAppPrefs";
 import { SupportBanner } from "@/components/poruch/SupportBanner";
 
 export const metadata: Metadata = {
-  title: "Поруч",
+  title: "Просвіт",
   robots: { index: false }, // miniapp routes are not for search
 };
 

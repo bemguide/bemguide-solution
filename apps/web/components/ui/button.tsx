@@ -4,7 +4,7 @@ import { Slot } from "radix-ui";
 
 import { cn } from "@/lib/utils";
 
-// Base classes match the Поруч spec tone: rounded, sentence-case, normal tracking,
+// Base classes match the Просвіт spec tone: rounded, sentence-case, normal tracking,
 // semibold body weight. The shadcn radix-sera defaults (rounded-none + uppercase
 // + tracking-widest + text-xs) were too brutalist for a calm veteran-facing app.
 const buttonVariants = cva(

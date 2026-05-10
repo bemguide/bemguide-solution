@@ -30,6 +30,7 @@ import {
   useState,
 } from "react";
 import { AlertCircle, ArrowUp, Loader2, Sparkles } from "lucide-react";
+import { Streamdown } from "streamdown";
 import { CrisisCard } from "@/components/poruch/CrisisCard";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import { cn } from "@/lib/utils";
@@ -487,7 +488,7 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
       </div>
       <div className="space-y-2">
         <h1 className="text-foreground text-2xl font-semibold leading-tight tracking-tight">
-          Помічник Поруч
+          Помічник Просвіту
         </h1>
         <p className="text-muted-foreground mx-auto max-w-xs text-sm leading-relaxed">
           Розберуся зі статусом ветерана, пільгами, послугами Дії і куди
@@ -519,7 +520,11 @@ function Welcome({ onPick }: { onPick: (text: string) => void }) {
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line break-words rounded-2xl rounded-br-md px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
+      {/* `rounded-xl` (16px) for the bubble; the project's
+          `rounded-2xl` resolves to 999px (pill) per globals.css and
+          turns long bubbles into ovals. Bottom-right gets a tighter
+          radius so the bubble points back at the speaker. */}
+      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line break-words rounded-xl rounded-br-sm px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
         {text}
       </div>
     </div>
@@ -539,7 +544,7 @@ function AssistantBubble({
   if (message.error && !visibleText) {
     return (
       <div className="flex justify-start">
-        <div className="bg-destructive/10 text-destructive border-destructive/30 inline-flex max-w-[92%] items-start gap-2 rounded-2xl rounded-bl-md border px-4 py-2.5 text-sm leading-relaxed">
+        <div className="bg-destructive/10 text-destructive border-destructive/30 inline-flex max-w-[92%] items-start gap-2 rounded-xl rounded-bl-sm border px-4 py-2.5 text-sm leading-relaxed">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <span>{message.error}</span>
         </div>
@@ -550,12 +555,37 @@ function AssistantBubble({
   return (
     <div className="flex justify-start">
       <div className="max-w-[92%] space-y-2">
-        <div className="bg-card text-foreground border-border whitespace-pre-line break-words rounded-2xl rounded-bl-md border px-4 py-3 text-[15px] leading-relaxed shadow-sm">
+        <div
+          className={cn(
+            "bg-card text-foreground border-border break-words rounded-xl rounded-bl-sm border px-4 py-3 text-[15px] leading-relaxed shadow-sm",
+            // Markdown styling — applied via descendant selectors so
+            // we don't need the @tailwindcss/typography plugin.
+            // Order matters: more specific rules later override.
+            "[&>*]:my-2 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+            "[&_p]:leading-relaxed",
+            "[&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:no-underline",
+            "[&_strong]:font-semibold [&_em]:italic",
+            "[&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1",
+            "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1",
+            "[&_li]:my-1 [&_li>p]:my-0",
+            "[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:font-mono",
+            "[&_pre]:bg-muted [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:text-[13px]",
+            "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
+            "[&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-3",
+            "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-3",
+            "[&_h3]:text-sm [&_h3]:font-semibold [&_h3]:mt-3",
+            "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground",
+            "[&_hr]:border-border [&_hr]:my-3",
+            // Tap-to-call: any phone-number-styled link in the
+            // message body should look like the inline links above
+            // — and Streamdown auto-links phone numbers when the
+            // model writes them as `[label](tel:...)`.
+          )}
+        >
           {visibleText ? (
-            <>
+            <Streamdown parseIncompleteMarkdown>
               {visibleText}
-              {message.pending ? <Cursor /> : null}
-            </>
+            </Streamdown>
           ) : (
             <TypingDots />
           )}
@@ -573,18 +603,6 @@ function AssistantBubble({
         ) : null}
       </div>
     </div>
-  );
-}
-
-/** Inline cursor for in-flight streamed text. Styled span beats the
- *  literal "▍" character — the latter has font-dependent vertical
- *  alignment and renders thicker on Cyrillic faces. */
-function Cursor() {
-  return (
-    <span
-      aria-hidden
-      className="bg-foreground/50 ml-0.5 inline-block h-[1em] w-0.5 translate-y-[2px] animate-pulse align-middle"
-    />
   );
 }
 

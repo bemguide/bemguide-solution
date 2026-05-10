@@ -119,9 +119,9 @@ function DecidingScreen() {
         paddingBottom: "var(--tg-safe-area-inset-bottom, 0px)",
       }}
       aria-busy
-      aria-label="Поруч"
+      aria-label="Просвіт"
     >
-      <h1 className="text-foreground text-4xl font-semibold tracking-tight">Поруч</h1>
+      <h1 className="text-foreground text-4xl font-semibold tracking-tight">Просвіт</h1>
     </main>
   );
 }

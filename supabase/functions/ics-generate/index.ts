@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
   const description = [
     event.description ?? "",
     event.organizer_contact ? `Контакт: ${event.organizer_contact}` : "",
-    "Згенеровано Поруч.",
+    "Згенеровано Просвітом.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
-    "PRODID:-//Поруч//uk//EN",
+    "PRODID:-//Просвіт//uk//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
     "BEGIN:VEVENT",

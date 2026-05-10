@@ -31,7 +31,16 @@
 
 import type { AuthExchangeResponse } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+// Default to the same-origin proxy at `/api/v2/...` (defined by
+// `apps/web/app/api/v2/[...path]/route.ts`) so the browser never makes
+// a cross-origin request and we don't depend on the upstream's CORS
+// allowlist or its CORS-on-5xx behaviour.
+//
+// `NEXT_PUBLIC_API_BASE` still wins when set — useful for local dev
+// where the developer is pointing at a fresh ngrok tunnel and wants
+// the bare upstream URL in the network tab. `||` (not `??`) so an
+// empty string falls back to the proxy.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "/api/v2";
 const TOKEN_KEY = "poruch.v2.token";
 const EXPIRY_KEY = "poruch.v2.token_expires_at";
 

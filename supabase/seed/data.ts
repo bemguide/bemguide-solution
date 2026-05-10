@@ -1,4 +1,4 @@
-// Seed data for Поруч: 6 organizations, 30 events across Київ/Львів/Дніпро,
+// Seed data for Просвіт: 6 organizations, 30 events across Київ/Львів/Дніпро,
 // 26 ghost veterans (with realistic Ukrainian first names; persona names
 // Дмитро/Катерина/Михайло/Василь are deliberately excluded).
 
@@ -85,7 +85,7 @@ export type SeedOrg = {
 export const SEED_ORGS: SeedOrg[] = [
   {
     key: "poruch_kyiv",
-    name: "ГО «Поруч» — Київський осередок",
+    name: "ГО «Просвіт» — Київський осередок",
     contact_name: "Олена",
     contact_phone: "+380440000001",
     contact_telegram: "@poruch_kyiv",

@@ -1,7 +1,7 @@
 // /admin/event/[id] — full preview + AI panel + action buttons.
 
 import { notFound } from "next/navigation";
-import Image from "next/image";
+import { RemoteImage } from "@/components/poruch/RemoteImage";
 import { requireAdmin } from "@/lib/admin";
 import { serverSupabase } from "@/lib/supabase/server";
 import { formatEventDateTime, formatPrice } from "@/lib/format";
@@ -51,15 +51,7 @@ export default async function AdminEventPage({ params }: { params: Promise<{ id:
     <div className="grid gap-6 lg:grid-cols-[3fr_2fr]">
       <article className="bg-card border-border space-y-4 overflow-hidden rounded-xl border">
         <div className="bg-muted relative aspect-[16/10] w-full">
-          {display.photo_url ? (
-            <Image
-              src={display.photo_url}
-              alt={display.title}
-              fill
-              sizes="(max-width: 1024px) 100vw, 60vw"
-              className="object-cover"
-            />
-          ) : null}
+          <RemoteImage src={display.photo_url} alt={display.title} />
         </div>
         <div className="space-y-3 p-4">
           <h1 className="text-foreground text-2xl font-semibold leading-tight">{display.title}</h1>

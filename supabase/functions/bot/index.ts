@@ -63,11 +63,11 @@ bot.command("start", async (ctx) => {
 
   // Default welcome
   const keyboard = new InlineKeyboard()
-    .webApp("Відкрити Поруч", `${APP_URL}/m/onboarding`)
+    .webApp("Відкрити Просвіт", `${APP_URL}/m/onboarding`)
     .row()
     .text("Що це?", "intro");
   return ctx.reply(
-    "Поруч — щоб поряд були люди і події, без зайвих питань.\n\nВідкрий мініапп — там покажу, що поруч сьогодні і завтра.",
+    "Просвіт — щоб поряд були люди і події, без зайвих питань.\n\nВідкрий мініапп — там покажу, що поруч сьогодні і завтра.",
     { reply_markup: keyboard },
   );
 });
@@ -76,7 +76,7 @@ bot.command("start", async (ctx) => {
 bot.callbackQuery("intro", async (ctx) => {
   await ctx.answerCallbackQuery();
   await ctx.reply(
-    "Поруч — це коротка стрічка локальних подій, де можна зустріти інших ветеранів. " +
+    "Просвіт — це коротка стрічка локальних подій, де можна зустріти інших ветеранів. " +
       "Без анкет на сторінку, без обов'язків. Один тап «Я буду» — і нагадаю напередодні.",
   );
 });
@@ -143,7 +143,7 @@ bot.command("me", async (ctx) => {
   }
 
   const keyboard = new InlineKeyboard()
-    .webApp("Відкрити Поруч", `${APP_URL}/m/feed`)
+    .webApp("Відкрити Просвіт", `${APP_URL}/m/feed`)
     .row()
     .webApp("Налаштування", `${APP_URL}/m/me`);
   return ctx.reply(lines.join("\n"), { reply_markup: keyboard });
@@ -166,7 +166,7 @@ bot.command("help", (ctx) =>
   ctx.reply(
     [
       "Що я вмію:",
-      "/start — відкрити Поруч",
+      "/start — відкрити Просвіт",
       "/me — мої записи і налаштування",
       "/newevent — запропонувати свою подію (доступно в мініапп)",
       "/stop_reminders — вимкнути нагадування",

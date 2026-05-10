@@ -10,7 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Поруч",
+  title: "Просвіт",
   description: "Знайди подію поруч.",
 };
 

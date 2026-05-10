@@ -2,7 +2,7 @@
 // SSR. No login required — built for sharing via Viber/Telegram/Instagram.
 // The "Я буду" button deep-links into the bot for users who aren't already in the Mini App.
 
-import Image from "next/image";
+import { RemoteImage } from "@/components/poruch/RemoteImage";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CalendarClock, MapPin, Phone, Send } from "lucide-react";
@@ -39,9 +39,9 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const event = await fetchEvent(id).catch(() => null);
-  if (!event) return { title: "Поруч" };
+  if (!event) return { title: "Просвіт" };
   return {
-    title: `${event.title} — Поруч`,
+    title: `${event.title} — Просвіт`,
     description: event.short_description ?? event.description?.slice(0, 160) ?? undefined,
     openGraph: {
       title: event.title,
@@ -82,19 +82,8 @@ export default async function PublicEventPage({ params }: { params: Promise<{ id
   return (
     <main className="bg-background mx-auto flex min-h-screen w-full max-w-md flex-col pb-32">
       {/* Hero */}
-      <div className="relative aspect-[16/10] w-full overflow-hidden">
-        {event.photo_url ? (
-          <Image
-            src={event.photo_url}
-            alt={event.title}
-            fill
-            sizes="(max-width: 768px) 100vw, 480px"
-            priority
-            className="object-cover"
-          />
-        ) : (
-          <div className="bg-muted h-full w-full" aria-hidden />
-        )}
+      <div className="bg-muted relative aspect-[16/10] w-full overflow-hidden">
+        <RemoteImage src={event.photo_url} alt={event.title} priority />
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/70 via-black/30 to-transparent"
           aria-hidden

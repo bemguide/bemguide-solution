@@ -12,7 +12,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <header className="bg-card border-border border-b">
         <div className="mx-auto flex max-w-5xl items-center gap-6 px-6 py-3">
           <Link href="/admin/inbox" className="text-foreground text-lg font-semibold">
-            Поруч · admin
+            Просвіт · admin
           </Link>
           <nav className="text-muted-foreground flex flex-1 gap-4 text-sm">
             <Link href="/admin/inbox" className="hover:text-foreground">

@@ -67,7 +67,7 @@ Deno.test("copy.why_this: does NOT invent names not in going_names_visible", asy
     const NAME_TOKEN = /\b[А-ЯҐІЇЄ][а-яґіїє'`]{3,}/;
     const tokens = json.text.match(/\b[А-ЯҐІЇЄ][а-яґіїє'`]{3,}\b/g) ?? [];
     // City names are allowed.
-    const allowed = new Set(["Львів", "Київ", "Дніпро", "Поруч"]);
+    const allowed = new Set(["Львів", "Київ", "Дніпро", "Просвіт"]);
     for (const t of tokens) {
       assert(allowed.has(t), `unexpected name in copy: "${t}" (full: "${json.text}")`);
     }

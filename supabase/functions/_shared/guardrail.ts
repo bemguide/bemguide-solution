@@ -60,7 +60,7 @@ export function checkCopy(
       "Листопада",
       "Грудня",
       "Гадяч",
-      "Поруч",
+      "Просвіт",
     ]);
     for (const t of tokens) {
       if (allowed.has(t)) continue;

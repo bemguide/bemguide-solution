@@ -16,7 +16,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Image from "next/image";
+import { RemoteImage } from "@/components/poruch/RemoteImage";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MapPin, Navigation, Users } from "lucide-react";
@@ -131,19 +131,8 @@ export function PlaceDetailClient({ id }: { id: string }) {
 
   return (
     <main className="bg-background flex flex-1 flex-col overflow-y-auto pb-32">
-      <div className="relative aspect-[16/10] w-full overflow-hidden">
-        {place.photo_url ? (
-          <Image
-            src={place.photo_url}
-            alt={place.title}
-            fill
-            sizes="(max-width: 768px) 100vw, 480px"
-            priority
-            className="object-cover"
-          />
-        ) : (
-          <div className="bg-muted h-full w-full" aria-hidden />
-        )}
+      <div className="bg-muted relative aspect-[16/10] w-full overflow-hidden">
+        <RemoteImage src={place.photo_url} alt={place.title} priority />
         <div
           className="pointer-events-none absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
           aria-hidden

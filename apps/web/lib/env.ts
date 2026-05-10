@@ -10,7 +10,13 @@ const ServerEnv = z.object({
   TELEGRAM_BOT_TOKEN: z.string().min(1),
   TELEGRAM_BOT_USERNAME: z.string().min(1),
   TELEGRAM_WEBHOOK_SECRET: z.string().min(1),
-  NEXT_PUBLIC_APP_URL: z.string().url(),
+  // Strip trailing slash on read so consumers (`${APP_URL}/m/...`)
+  // never produce double slashes. Matches what
+  // supabase/functions/_shared/env.ts does on the bot side.
+  NEXT_PUBLIC_APP_URL: z
+    .string()
+    .url()
+    .transform((v) => v.replace(/\/+$/, "")),
   ADMIN_PASSWORD: z.string().min(1),
 });
 
@@ -29,7 +35,9 @@ export function serverEnv(): ServerEnv {
   return cached;
 }
 
-// Public env — safe to ship to client.
+// Public env — safe to ship to client. Trailing slash stripped to match
+// the server-side `serverEnv().NEXT_PUBLIC_APP_URL` shape, so callers
+// always concatenate `${appUrl}/m/...` without producing `//m/...`.
 export const publicEnv = {
-  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
+  appUrl: (process.env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/+$/, ""),
 };
