@@ -34,6 +34,7 @@ import { buildEventShareUrl } from "@/lib/share";
 import { extractFirstUrl } from "@/lib/url";
 import { QrSheet } from "@/components/poruch/QrSheet";
 import { formatEventDateTime } from "@/lib/format";
+import { EventChatButton } from "./EventChatButton";
 import type { Attending } from "./ClientEventPage";
 
 export function EventActions({
@@ -70,7 +71,9 @@ export function EventActions({
         eventTitle={eventTitle}
         eventStartAt={eventStartAt}
         city={city}
+        room={attending.room}
         onDeclined={() => onAttendingChange({ kind: "declined" })}
+        onRoomChange={(room) => onAttendingChange({ kind: "yes", room })}
       />
     );
   }
@@ -103,13 +106,17 @@ function AttendingBar({
   eventTitle,
   eventStartAt,
   city,
+  room,
   onDeclined,
+  onRoomChange,
 }: {
   eventId: string;
   eventTitle: string;
   eventStartAt: string;
   city: string | null;
+  room: V2EventRoom | null;
   onDeclined: () => void;
+  onRoomChange: (room: V2EventRoom) => void;
 }) {
   const [showName, setShowName] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -175,6 +182,12 @@ function AttendingBar({
           >
             Показати QR
           </Button>
+
+          <EventChatButton
+            eventId={eventId}
+            initialRoom={room}
+            onRoomChange={onRoomChange}
+          />
 
           <div className="grid grid-cols-2 gap-2">
             <Button
