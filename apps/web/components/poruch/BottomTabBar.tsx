@@ -32,7 +32,7 @@ function PlusIcon({ active }: IconProps) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-[22px] w-[22px]"
+      className="h-[1.375rem] w-[1.375rem]"
       fill="none"
       stroke="currentColor"
       strokeWidth={active ? 2.1 : 1.7}
@@ -53,7 +53,7 @@ function SparkleIcon({ active }: IconProps) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-[22px] w-[22px]"
+      className="h-[1.375rem] w-[1.375rem]"
       fill={active ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth={1.7}
@@ -73,7 +73,7 @@ function ChatIcon({ active }: IconProps) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-[22px] w-[22px]"
+      className="h-[1.375rem] w-[1.375rem]"
       fill={active ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth={1.7}
@@ -100,7 +100,7 @@ function UserIcon({ active }: IconProps) {
   return (
     <svg
       viewBox="0 0 24 24"
-      className="h-[22px] w-[22px]"
+      className="h-[1.375rem] w-[1.375rem]"
       fill={active ? "currentColor" : "none"}
       stroke="currentColor"
       strokeWidth={1.7}
@@ -174,7 +174,7 @@ export function BottomTabBar() {
                   // breathing room above the home-indicator inset, and
                   // a slightly taller bar reads as more confident on
                   // mobile.
-                  "group relative flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium tracking-tight",
+                  "group relative flex h-16 flex-col items-center justify-center gap-1 text-[0.6875rem] font-medium tracking-tight",
                   // Subtle press-scale + colour fade. Material's
                   // "scale-feedback" rule — confirms a tap landed
                   // before the next route paints, so users don't

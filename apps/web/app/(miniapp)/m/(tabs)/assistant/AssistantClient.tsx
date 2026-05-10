@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import {
   AgentApiError,
   type AgentCitation,
+  type AgentEventRef,
   type AgentSseEvent,
   type CrisisCardData,
   clearConversationId,
@@ -48,6 +49,9 @@ import {
 } from "@/lib/agent";
 import { getCurrentUser, isNoTelegramEnv, logApiError } from "@/lib/api";
 import type { V2User } from "@/lib/api";
+import { formatRelativeWhen } from "@/lib/format";
+import { RemoteImage } from "@/components/poruch/RemoteImage";
+import Link from "next/link";
 
 type ChatMessage =
   | { id: string; role: "user"; text: string }
@@ -56,6 +60,7 @@ type ChatMessage =
       role: "assistant";
       text: string;
       citations: AgentCitation[];
+      eventRefs: AgentEventRef[];
       pending: boolean;
       error?: string;
     };
@@ -178,6 +183,7 @@ export function AssistantClient() {
       role: "assistant",
       text: "",
       citations: [],
+      eventRefs: [],
       pending: true,
     };
 
@@ -199,6 +205,7 @@ export function AssistantClient() {
                 ...msg,
                 text: "",
                 citations: [],
+                eventRefs: [],
                 pending: true,
                 error: undefined,
               }
@@ -244,6 +251,29 @@ export function AssistantClient() {
           setCrisis(card);
           setMessages((m) => m.filter((msg) => msg.id !== assistantId));
         }
+        return;
+      }
+      if (evt.event === "event_refs") {
+        // Backend emits one frame per event-returning tool call. The
+        // model may call the same tool twice (e.g. list_my_events ➜
+        // get_event_details) and surface the same event each time —
+        // dedupe by id so the user doesn't see two cards for the
+        // same thing.
+        const incoming = evt.data.events ?? [];
+        if (incoming.length === 0) return;
+        setMessages((m) =>
+          m.map((msg) => {
+            if (msg.id !== assistantId || msg.role !== "assistant") return msg;
+            const seen = new Set(msg.eventRefs.map((e) => e.id));
+            const merged = [...msg.eventRefs];
+            for (const ev of incoming) {
+              if (!ev?.id || seen.has(ev.id)) continue;
+              seen.add(ev.id);
+              merged.push(ev);
+            }
+            return { ...msg, eventRefs: merged };
+          }),
+        );
         return;
       }
       if (evt.event === "done") {
@@ -524,7 +554,7 @@ function UserBubble({ text }: { text: string }) {
           `rounded-2xl` resolves to 999px (pill) per globals.css and
           turns long bubbles into ovals. Bottom-right gets a tighter
           radius so the bubble points back at the speaker. */}
-      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line break-words rounded-xl rounded-br-sm px-4 py-2.5 text-[15px] leading-relaxed shadow-sm">
+      <div className="bg-primary text-primary-foreground max-w-[85%] whitespace-pre-line break-words rounded-xl rounded-br-sm px-4 py-2.5 text-[0.9375rem] leading-relaxed shadow-sm">
         {text}
       </div>
     </div>
@@ -557,7 +587,7 @@ function AssistantBubble({
       <div className="max-w-[92%] space-y-2">
         <div
           className={cn(
-            "bg-card text-foreground border-border break-words rounded-xl rounded-bl-sm border px-4 py-3 text-[15px] leading-relaxed shadow-sm",
+            "bg-card text-foreground border-border break-words rounded-xl rounded-bl-sm border px-4 py-3 text-[0.9375rem] leading-relaxed shadow-sm",
             // Markdown styling — applied via descendant selectors so
             // we don't need the @tailwindcss/typography plugin.
             // Order matters: more specific rules later override.
@@ -568,8 +598,8 @@ function AssistantBubble({
             "[&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:space-y-1",
             "[&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1",
             "[&_li]:my-1 [&_li>p]:my-0",
-            "[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[13px] [&_code]:font-mono",
-            "[&_pre]:bg-muted [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:text-[13px]",
+            "[&_code]:bg-muted [&_code]:rounded [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-[0.8125rem] [&_code]:font-mono",
+            "[&_pre]:bg-muted [&_pre]:rounded-lg [&_pre]:p-3 [&_pre]:overflow-x-auto [&_pre]:text-[0.8125rem]",
             "[&_pre_code]:bg-transparent [&_pre_code]:p-0",
             "[&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-3",
             "[&_h2]:text-base [&_h2]:font-semibold [&_h2]:mt-3",
@@ -583,7 +613,16 @@ function AssistantBubble({
           )}
         >
           {visibleText ? (
-            <Streamdown parseIncompleteMarkdown>
+            // `linkSafety: enabled:false` — Streamdown's default click
+            // confirmation rewrites links to a `[blocked]` placeholder
+            // when the host isn't on its implicit allowlist (e.g. any
+            // facebook.com URL the agent surfaces from `source_url` on
+            // an `opportunity_program` row). The agent's content is
+            // ours: system prompt is curated, tools query our own DB,
+            // there's no untrusted link surface that this modal would
+            // protect against — so disabling is straightforward, and
+            // every link the agent produces becomes a normal `<a>`.
+            <Streamdown parseIncompleteMarkdown linkSafety={{ enabled: false }}>
               {visibleText}
             </Streamdown>
           ) : (
@@ -598,11 +637,98 @@ function AssistantBubble({
           </p>
         ) : null}
 
+        {message.eventRefs.length > 0 ? (
+          <EventRefsStack events={message.eventRefs} />
+        ) : null}
+
         {message.citations.length > 0 ? (
           <CitationsRow citations={message.citations} />
         ) : null}
       </div>
     </div>
+  );
+}
+
+// Tappable cards stacked under the assistant bubble — one per event
+// the agent's tool calls referenced. Each card links to the event
+// detail page (`/m/event/[id]`) where the user can RSVP / see the
+// full description / open the chat room.
+//
+// Visual: 56-px square photo on the left (placeholder when no
+// photo_url), title + date + address stacked on the right, chevron
+// glyph hinting "tap me". Subtle border + hover lift, no shadow —
+// the assistant bubble already has one and a second shadow under it
+// would feel cluttered.
+function EventRefsStack({ events }: { events: AgentEventRef[] }) {
+  return (
+    <ul className="space-y-1.5">
+      {events.map((ev) => (
+        <li key={ev.id}>
+          <EventRefCard event={ev} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function EventRefCard({ event }: { event: AgentEventRef }) {
+  const when = event.start_at ? formatRelativeWhen(event.start_at) : null;
+  const where = event.address || event.city;
+
+  return (
+    <Link
+      href={`/m/event/${event.id}`}
+      style={TAP_STYLE}
+      className={cn(
+        "group bg-card border-border flex items-stretch gap-3 rounded-xl border p-2 pr-3 transition-colors",
+        "hover:border-primary/40 hover:bg-accent/30",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+      )}
+    >
+      <div className="bg-muted relative h-14 w-14 shrink-0 overflow-hidden rounded-lg">
+        {event.photo_url ? (
+          <RemoteImage src={event.photo_url} alt="" />
+        ) : (
+          // Placeholder glyph when the event has no photo — keeps the
+          // card visually balanced. Sparkle ≠ accidentally generic;
+          // it matches the "Для тебе" tab icon, signalling "this came
+          // from the assistant's matching".
+          <div className="text-muted-foreground/60 flex h-full w-full items-center justify-center">
+            <Sparkles className="h-5 w-5" aria-hidden />
+          </div>
+        )}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        <p className="text-foreground line-clamp-2 text-sm font-semibold leading-snug">
+          {event.title}
+        </p>
+        <p className="text-muted-foreground line-clamp-1 text-xs">
+          {when ? <span>{when}</span> : null}
+          {when && where ? <span aria-hidden> · </span> : null}
+          {where ? <span>{where}</span> : null}
+          {!when && !where ? <span>{event.city ?? "Деталі →"}</span> : null}
+        </p>
+      </div>
+      {/* Chevron — tiny visual hint that the card is tappable; the
+          arrow leans toward LTR reading even in a Cyrillic UI because
+          users learn this pattern from native apps. */}
+      <span
+        aria-hidden
+        className="text-muted-foreground/60 group-hover:text-primary self-center transition-colors"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M9 6l6 6-6 6" />
+        </svg>
+      </span>
+    </Link>
   );
 }
 
@@ -622,7 +748,7 @@ function TypingDots() {
 function CitationsRow({ citations }: { citations: AgentCitation[] }) {
   return (
     <div className="space-y-1.5 pl-1">
-      <p className="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">
+      <p className="text-muted-foreground text-[0.625rem] font-semibold uppercase tracking-wider">
         Джерела
       </p>
       <ul className="flex flex-wrap gap-1.5">
@@ -634,7 +760,7 @@ function CitationsRow({ citations }: { citations: AgentCitation[] }) {
               rel="noopener noreferrer"
               className="bg-accent text-accent-foreground hover:bg-accent/70 inline-flex max-w-[260px] items-baseline gap-1.5 rounded-md px-2 py-1 text-xs leading-snug transition-colors"
             >
-              <span className="text-muted-foreground shrink-0 text-[10px] uppercase">
+              <span className="text-muted-foreground shrink-0 text-[0.625rem] uppercase">
                 {c.kind}
               </span>
               <span className="line-clamp-2">{c.title}</span>
@@ -691,7 +817,7 @@ function Composer({
           autoCapitalize="sentences"
           enterKeyHint="send"
           className={cn(
-            "placeholder:text-muted-foreground/80 field-sizing-content max-h-32 min-h-[36px] flex-1 resize-none bg-transparent px-3 py-2 text-[15px] leading-snug outline-none",
+            "placeholder:text-muted-foreground/80 field-sizing-content max-h-32 min-h-[36px] flex-1 resize-none bg-transparent px-3 py-2 text-[0.9375rem] leading-snug outline-none",
             "disabled:cursor-not-allowed disabled:placeholder:text-muted-foreground/60",
           )}
         />

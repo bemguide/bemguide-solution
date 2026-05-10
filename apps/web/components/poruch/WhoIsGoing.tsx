@@ -26,14 +26,14 @@ export function WhoIsGoing({
           </span>
         ))}
         {hiddenCount > 0 ? (
-          <span className="bg-muted text-muted-foreground border-card flex h-7 w-7 items-center justify-center rounded-full border-2 text-[11px] font-semibold">
+          <span className="bg-muted text-muted-foreground border-card flex h-7 w-7 items-center justify-center rounded-full border-2 text-[0.6875rem] font-semibold">
             +{hiddenCount}
           </span>
         ) : null}
       </div>
       <div className="text-foreground flex flex-col">
         <span className="text-sm font-semibold">{formatCount(count)}</span>
-        <span className="text-muted-foreground text-[11px] leading-tight">
+        <span className="text-muted-foreground text-[0.6875rem] leading-tight">
           {namesVisible.length
             ? "Імена бачать тільки записані ветерани"
             : "Імена приховані за замовчуванням"}

@@ -24,6 +24,8 @@ export type {
   AgentConversationSummary,
   AgentDoneData,
   AgentErrorData,
+  AgentEventRef,
+  AgentEventRefsData,
   AgentFact,
   AgentSseEvent,
   AgentTranscript,

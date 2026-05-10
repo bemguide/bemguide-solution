@@ -53,11 +53,35 @@ export type AgentErrorData = {
   message: string;
 };
 
+/**
+ * One event the agent referenced via a tool call (list_upcoming_events,
+ * list_my_events, get_event_details). Render as a tappable card under
+ * the assistant message, linking to `/m/event/<id>`. The backend emits
+ * one `event_refs` SSE frame per tool call; the UI dedupes by id.
+ *
+ * Field shape is a deliberate subset of the full OpportunityCard that
+ * `/m/event/[id]` loads — just enough to render a compact row without
+ * needing a second round-trip.
+ */
+export type AgentEventRef = {
+  id: string;
+  title: string;
+  short_description: string | null;
+  /** ISO 8601, or null for recurring services without a fixed time. */
+  start_at: string | null;
+  city: string | null;
+  address: string | null;
+  photo_url: string | null;
+};
+
+export type AgentEventRefsData = { events: AgentEventRef[] };
+
 export type AgentSseEvent =
   | { event: "conversation"; data: { conversation_id: string } }
   | { event: "token"; data: { text: string } }
   | { event: "citation"; data: AgentCitation }
   | { event: "action"; data: AgentAction }
+  | { event: "event_refs"; data: AgentEventRefsData }
   | { event: "done"; data: AgentDoneData }
   | { event: "error"; data: AgentErrorData };
 

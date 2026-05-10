@@ -88,13 +88,13 @@ export function AccessibilityChips({
       {shown.map((flag) => (
         <span
           key={flag}
-          className="bg-accent text-accent-foreground rounded-md px-1.5 py-0.5 text-[11px]"
+          className="bg-accent text-accent-foreground rounded-md px-1.5 py-0.5 text-[0.6875rem]"
           aria-label={ACCESSIBILITY_LABELS_UK[flag]}
         >
           {ACCESSIBILITY_LABELS_UK[flag]}
         </span>
       ))}
-      {more > 0 ? <span className="text-[11px]">+{more}</span> : null}
+      {more > 0 ? <span className="text-[0.6875rem]">+{more}</span> : null}
     </div>
   );
 }

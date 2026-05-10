@@ -88,7 +88,7 @@ export function ProgramCard({ program }: { program: ProgramFeedItem }) {
 
       {program.how_to_apply ? (
         <div className="space-y-0.5">
-          <p className="text-muted-foreground text-[11px] font-semibold uppercase tracking-wider">
+          <p className="text-muted-foreground text-[0.6875rem] font-semibold uppercase tracking-wider">
             Як отримати
           </p>
           <p className="text-foreground whitespace-pre-line text-sm leading-relaxed">
