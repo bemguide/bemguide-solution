@@ -142,18 +142,24 @@
   * {
     border-color: var(--color-border);
   }
+  html {
+    font-family: var(--font-sans);
+    /* `--app-font-scale` is set by `app-prefs.applyAppPrefs()` so the
+       Адаптація онбординг step can scale every text element with one
+       knob (0.92 / 1 / 1.14). Anchored on `html` (not `body`) because
+       Tailwind's text-* classes are `rem`-based, and `1rem` resolves
+       against the root element — putting the rule on `body` only
+       scaled the bare `body` text, leaving every `text-sm`/`text-base`/
+       `text-xl` Tailwind-styled element at the unchanged 16px root.
+       Moving it to `html` makes 1rem itself scale, and the whole app
+       follows. */
+    font-size: calc(16px * var(--app-font-scale, 1));
+  }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
-    /* `--app-font-scale` is set by `app-prefs.applyAppPrefs()` so the
-       Адаптація онбординг step can scale every text element with one
-       knob (0.92 / 1 / 1.14) instead of editing per-component sizes. */
-    font-size: calc(16px * var(--app-font-scale, 1));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-  }
-  html {
-    font-family: var(--font-sans);
   }
   :focus-visible {
     outline: 2px solid var(--color-ring);
