@@ -22,4 +22,15 @@ export const env = {
   // here so every consumer sees the canonical form.
   publicAppUrl: () => requireEnv("NEXT_PUBLIC_APP_URL").replace(/\/+$/, ""),
   cronSecret: () => requireEnv("VERCEL_CRON_SECRET"),
+  // For the event-chat-attach flow: when a user creates an event chat via the
+  // Mini App's `?startgroup=event_<id>` deep-link, the bot detects the
+  // group-add and POSTs the chat_id + invite_url to the auth-backend's
+  // /internal/event-rooms/attach endpoint.
+  //   backendBaseUrl     — the Railway URL (e.g. https://...up.railway.app).
+  //   botInternalSecret  — shared with the auth-backend; bot signs the JSON
+  //                        body with HMAC-SHA256 and backend verifies.
+  // Call-time-checked (not module-import-time) so Edge Functions that don't
+  // exercise this flow keep deploying when the secrets aren't set.
+  backendBaseUrl: () => requireEnv("BACKEND_BASE_URL"),
+  botInternalSecret: () => requireEnv("BOT_INTERNAL_SECRET"),
 };
