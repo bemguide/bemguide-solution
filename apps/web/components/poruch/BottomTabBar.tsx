@@ -175,7 +175,11 @@ export function BottomTabBar() {
                   // a slightly taller bar reads as more confident on
                   // mobile.
                   "group relative flex h-16 flex-col items-center justify-center gap-1 text-[11px] font-medium tracking-tight",
-                  "transition-colors duration-150",
+                  // Subtle press-scale + colour fade. Material's
+                  // "scale-feedback" rule — confirms a tap landed
+                  // before the next route paints, so users don't
+                  // wonder if their tap registered on a slow load.
+                  "transition-[color,transform] duration-150 ease-out active:scale-[0.96]",
                   active
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground",

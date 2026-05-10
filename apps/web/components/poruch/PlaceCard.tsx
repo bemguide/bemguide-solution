@@ -20,7 +20,8 @@ export function PlaceCard({ place }: { place: OpportunityHealthCard }) {
   return (
     <Link
       href={`/m/place/${place.id}`}
-      className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
+      style={{ touchAction: "manipulation" }}
+      className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition-[transform,box-shadow,border-color] duration-150 ease-out hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 active:scale-[0.985] active:shadow-none"
     >
       {place.photo_url ? (
         <div className="bg-muted relative aspect-[16/9] w-full">

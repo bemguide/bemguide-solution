@@ -288,12 +288,19 @@ export function FeedClient() {
   const showOnboardingNudge = me !== null && me.city === null && tab === "all";
 
   return (
-    <main className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-4">
-      <FilterTabs tab={tab} onChange={setTab} />
+    <main className="relative flex flex-1 flex-col overflow-y-auto pb-6">
+      {/* Sticky chip strip — keeps the filter row reachable even
+          deep inside a long feed. The bg + small bottom border gives
+          it a clear edge against the cards scrolling underneath, so
+          it stays readable without feeling like a separate UI region. */}
+      <div className="bg-background border-border/40 sticky top-0 z-10 border-b px-4 pb-3 pt-4 backdrop-blur">
+        <FilterTabs tab={tab} onChange={setTab} />
+      </div>
 
-      {showOnboardingNudge ? <OnboardingNudge /> : null}
+      <div className="flex flex-col gap-4 px-4 pt-4">
+        {showOnboardingNudge ? <OnboardingNudge /> : null}
 
-      {tab === "all" ? (
+        {tab === "all" ? (
         <DefaultBody
           sections={sections}
           city={city}
@@ -317,6 +324,7 @@ export function FeedClient() {
           city={city}
         />
       )}
+      </div>
     </main>
   );
 }
@@ -329,7 +337,7 @@ function OnboardingNudge() {
   return (
     <Link
       href="/m/onboarding"
-      className="bg-accent/40 border-border text-foreground hover:border-primary/40 hover:bg-accent/60 -mt-1 block rounded-xl border px-4 py-3 text-sm transition-colors"
+      className="bg-accent/40 border-border text-foreground hover:border-primary/40 hover:bg-accent/60 -mt-1 block rounded-xl border px-4 py-3 text-sm transition-[transform,background-color,border-color] duration-150 ease-out active:scale-[0.985]"
       style={{ touchAction: "manipulation" }}
     >
       <strong className="text-foreground font-semibold">Налаштувати профіль</strong>{" "}
@@ -697,27 +705,36 @@ function ProgramFilterChips({
   active: ProgramFilter;
   onChange: (next: ProgramFilter) => void;
 }) {
+  // 8 chips wrap to two rows on narrow screens — that double-line
+  // strip ate vertical space and broke the visual rhythm with the
+  // tabs above. Single horizontal scroll row keeps the chip strip
+  // one line tall and lets users flick through categories the same
+  // way they'd flick through stories. The negative -mx pulls the
+  // scroll edge under the section's px-4 so the first/last chip can
+  // brush the screen edge — same trick used for the tab strip.
   return (
-    <ToggleGroup
-      type="single"
-      spacing={2}
-      value={active}
-      onValueChange={(v) => v && onChange(v as ProgramFilter)}
-      className="flex flex-wrap"
-      aria-label="Фільтр програм"
-    >
-      {PROGRAM_FILTER_ORDER.map((f) => (
-        <ToggleGroupItem
-          key={f}
-          value={f}
-          variant="outline"
-          className={chipItemClasses}
-          aria-label={PROGRAM_FILTER_LABEL[f]}
-        >
-          {PROGRAM_FILTER_LABEL[f]}
-        </ToggleGroupItem>
-      ))}
-    </ToggleGroup>
+    <div className="-mx-4 overflow-x-auto px-4 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <ToggleGroup
+        type="single"
+        spacing={2}
+        value={active}
+        onValueChange={(v) => v && onChange(v as ProgramFilter)}
+        className="flex w-max flex-nowrap"
+        aria-label="Фільтр програм"
+      >
+        {PROGRAM_FILTER_ORDER.map((f) => (
+          <ToggleGroupItem
+            key={f}
+            value={f}
+            variant="outline"
+            className={chipItemClasses}
+            aria-label={PROGRAM_FILTER_LABEL[f]}
+          >
+            {PROGRAM_FILTER_LABEL[f]}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
   );
 }
 

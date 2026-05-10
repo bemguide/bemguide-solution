@@ -32,7 +32,8 @@ export function FeaturedEventCard({
   return (
     <Link
       href={href}
-      className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
+      style={{ touchAction: "manipulation" }}
+      className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition-[transform,box-shadow,border-color] duration-150 ease-out hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 active:scale-[0.985] active:shadow-none"
     >
       <div className="bg-muted relative aspect-[16/9] w-full">
         <RemoteImage src={event.photo_url} alt={event.title} priority={priority} />
@@ -82,7 +83,8 @@ export function CompactEventCard({
   return (
     <Link
       href={href}
-      className="bg-card border-border focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-2.5 transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
+      style={{ touchAction: "manipulation" }}
+      className="bg-card border-border focus-visible:ring-ring flex items-center gap-3 rounded-lg border p-2.5 transition-[transform,box-shadow,border-color] duration-150 ease-out hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 active:scale-[0.985] active:shadow-none"
     >
       <div className="bg-muted relative h-20 w-20 shrink-0 overflow-hidden rounded-md">
         <RemoteImage src={event.photo_url} alt={event.title} ariaHidden />
