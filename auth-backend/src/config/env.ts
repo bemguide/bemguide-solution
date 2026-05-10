@@ -59,6 +59,16 @@ const envSchema = z.object({
   DISPATCH_BATCH_SIZE: z.coerce.number().int().positive().default(50),
   ROOMS_PROVISION_BATCH_SIZE: z.coerce.number().int().positive().default(20),
 
+  // Per-user delivery cap on the invitations worker. Without this, a fresh
+  // user whose `event_matches` just landed gets every matching event's
+  // invitation back-to-back the next time the dispatcher runs — for our
+  // audience (veterans, often with PTSD) a 50-message flood from a bot
+  // they just /start'd is harmful, not helpful. The cap is enforced
+  // against the last 24h of `sent_at` history plus what's been sent in
+  // the current run, so the same value works for both single big runs
+  // and frequent small ones.
+  INVITATIONS_MAX_PER_USER_PER_DAY: z.coerce.number().int().positive().default(3),
+
   // When true, workers log what they would do but don't hit Telegram.
   DRY_RUN: z
     .string()

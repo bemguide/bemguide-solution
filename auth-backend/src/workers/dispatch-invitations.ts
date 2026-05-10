@@ -35,6 +35,7 @@ interface DispatchSummary {
   invitations_sent: number;
   invitations_failed: number;
   invitations_skipped_no_telegram: number;
+  invitations_skipped_rate_limit: number;
 }
 
 async function selectionPhase(): Promise<{ events: number; inserted: number }> {
@@ -102,13 +103,60 @@ async function deliveryPhase(): Promise<{
   sent: number;
   failed: number;
   skipped_no_telegram: number;
+  skipped_rate_limit: number;
 }> {
   const pending = await listPendingDispatch(env.DISPATCH_BATCH_SIZE);
   let sent = 0;
   let failed = 0;
   let skipped_no_telegram = 0;
+  let skipped_rate_limit = 0;
 
-  for (const inv of pending) {
+  // Per-user rate limit. Without it, a fresh user whose event_matches
+  // just landed receives every matching event's invitation back-to-back
+  // the next time this worker runs. For our audience that's distress,
+  // not helpfulness — see env comment on INVITATIONS_MAX_PER_USER_PER_DAY.
+  //
+  // Strategy: count `sent` invitations in the last 24h per user, then
+  // walk pending in score-desc order skipping any user whose budget is
+  // exhausted (24h history + sends already made in this run). Skipped
+  // rows stay in delivery_status='pending' and get reconsidered on the
+  // next run when the 24h window has rolled forward.
+  const cap = env.INVITATIONS_MAX_PER_USER_PER_DAY;
+  const userIdsInBatch = [...new Set(pending.map((inv) => inv.user_id))];
+  const recentByUser = new Map<string, number>();
+  if (userIdsInBatch.length > 0) {
+    const sinceIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const { data: recent, error: recentErr } = await supabaseAdmin
+      .from('event_invitations')
+      .select('user_id')
+      .in('user_id', userIdsInBatch)
+      .eq('delivery_status', 'sent')
+      .gte('sent_at', sinceIso);
+    if (recentErr) {
+      throw new Error(`recent-sent lookup failed: ${recentErr.message}`);
+    }
+    for (const row of recent ?? []) {
+      recentByUser.set(row.user_id, (recentByUser.get(row.user_id) ?? 0) + 1);
+    }
+  }
+  const sentInRunByUser = new Map<string, number>();
+
+  // Sort by score so the strongest match a user has pending arrives
+  // first within their daily budget. `score_at_invite` may be null on
+  // historical rows; fall back to 0 so they sort last.
+  const ordered = [...pending].sort(
+    (a, b) => (b.score_at_invite ?? 0) - (a.score_at_invite ?? 0),
+  );
+
+  for (const inv of ordered) {
+    const used = (recentByUser.get(inv.user_id) ?? 0) + (sentInRunByUser.get(inv.user_id) ?? 0);
+    if (used >= cap) {
+      // Don't mark failed — leave as pending so the next run revisits
+      // it. The 24h window is rolling, so eventually the budget frees up.
+      skipped_rate_limit += 1;
+      continue;
+    }
+
     try {
       const { data: user, error: userErr } = await supabaseAdmin
         .from('users')
@@ -128,6 +176,7 @@ async function deliveryPhase(): Promise<{
       const messageId = (result as { message_id?: number }).message_id ?? null;
       await markSent(inv.id, messageId === null ? null : String(messageId));
       sent += 1;
+      sentInRunByUser.set(inv.user_id, (sentInRunByUser.get(inv.user_id) ?? 0) + 1);
     } catch (err) {
       failed += 1;
       const reason = err instanceof Error ? err.message : 'unknown error';
@@ -136,7 +185,7 @@ async function deliveryPhase(): Promise<{
       });
     }
   }
-  return { sent, failed, skipped_no_telegram };
+  return { sent, failed, skipped_no_telegram, skipped_rate_limit };
 }
 
 function inviteText(title: string, eventId: string): string {
@@ -159,6 +208,7 @@ async function main(): Promise<void> {
     invitations_sent: 0,
     invitations_failed: 0,
     invitations_skipped_no_telegram: 0,
+    invitations_skipped_rate_limit: 0,
   };
 
   const sel = await selectionPhase();
@@ -169,6 +219,7 @@ async function main(): Promise<void> {
   summary.invitations_sent = del.sent;
   summary.invitations_failed = del.failed;
   summary.invitations_skipped_no_telegram = del.skipped_no_telegram;
+  summary.invitations_skipped_rate_limit = del.skipped_rate_limit;
 
   // eslint-disable-next-line no-console
   console.log(JSON.stringify({ worker: 'dispatch-invitations', dry_run: env.DRY_RUN, ...summary }));
