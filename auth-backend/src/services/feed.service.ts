@@ -328,82 +328,13 @@ export async function buildFilteredFeed(
   const user = await getById(userId);
   if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
 
-  const effectiveCity = cityFilter ?? user.city ?? null;
-  const tagSet = FILTER_TAG_SETS[filter];
-  const excludeTags = FILTER_EXCLUDE_TAGS[filter] ?? [];
-  // PostgREST array literal: `{a,b,c}` (no quotes around the brace block).
-  // Used with `.not('col', 'ov', expr)` → "classified_interest does NOT
-  // overlap with any of these tags". `ov` (overlaps) is preferred over
-  // `cs` (contains-all) for exclusions because for multi-tag exclude sets
-  // we mean "exclude if ANY of these are present", not "exclude only if
-  // ALL are present" — the two coincide only for single-element sets.
-  const excludeExpr = excludeTags.length > 0 ? `{${excludeTags.join(',')}}` : null;
-
-  const userInterestsSet = new Set<string>(user.classified_interest ?? []);
-
-  // Pull opportunities + opportunity_health in parallel. Each table is
-  // overfetched and merged below so a popular tag on one side doesn't
-  // crowd out the other.
-  const wallNow = toWallClockUtc(new Date());
-
-  let oppQuery = supabaseAdmin
-    .from('opportunities')
-    .select('*')
-    .overlaps('classified_interest', tagSet as unknown as string[])
-    // Drop past events. Undated events (start_at IS NULL) always pass —
-    // they're "always-on" entries living in the events table.
-    .or(`start_at.is.null,start_at.gte.${wallNow}`)
-    .order('start_at', { ascending: true, nullsFirst: false })
-    .limit(FILTERED_PER_TABLE_OVERFETCH);
-  if (excludeExpr) oppQuery = oppQuery.not('classified_interest', 'ov', excludeExpr);
-  const oppQueryFinal = effectiveCity ? oppQuery.eq('city', effectiveCity) : oppQuery;
-
-  let healthQuery = supabaseAdmin
-    .from('opportunity_health')
-    .select('*')
-    .overlaps('classified_interest', tagSet as unknown as string[])
-    .order('title', { ascending: true })
-    .limit(FILTERED_PER_TABLE_OVERFETCH);
-  if (excludeExpr) healthQuery = healthQuery.not('classified_interest', 'ov', excludeExpr);
-  const healthQueryFinal = effectiveCity ? healthQuery.eq('city', effectiveCity) : healthQuery;
-
-  const [oppResp, healthResp] = await Promise.all([oppQueryFinal, healthQueryFinal]);
-
-  if (oppResp.error)
-    throw AppError.upstream('Failed to load filtered opportunities', oppResp.error.message);
-  if (healthResp.error)
-    throw AppError.upstream('Failed to load filtered opportunity_health', healthResp.error.message);
-
-  const oppRows = (oppResp.data ?? []) as OpportunityRow[];
-  const healthRows = (healthResp.data ?? []) as OpportunityHealthRow[];
-
-  // Decorate opportunities with attendee counts (same logic as default feed
-  // decorate(), trimmed). Skipped for opportunity_health because it has
-  // visit_count built in.
-  const oppDecorations = await decorateOpportunities(oppRows);
-
-  const oppItems: FeedItem[] = oppRows.map((o) => {
-    const dec = oppDecorations.get(o.id);
-    return {
-      source: 'opportunity' as const,
-      ...serializeOpportunityTimes(o),
-      match_score: countOverlap(userInterestsSet, o.classified_interest),
-      attendee_count: dec?.attendee_count ?? 0,
-      names_visible: dec?.names_visible ?? [],
-      distance_km: null,
-    };
+  const merged = await queryClassifiedDualTable({
+    includeTags: FILTER_TAG_SETS[filter],
+    excludeTags: FILTER_EXCLUDE_TAGS[filter],
+    effectiveCity: cityFilter ?? user.city ?? null,
+    userInterestsSet: new Set<string>(user.classified_interest ?? []),
+    perTableLimit: FILTERED_PER_TABLE_OVERFETCH,
   });
-
-  const healthItems: FeedItem[] = healthRows.map((h) => ({
-    source: 'opportunity_health' as const,
-    ...h,
-    match_score: countOverlap(userInterestsSet, h.classified_interest),
-    distance_km: null,
-  }));
-
-  // Merge, sort by match_score desc + stable tiebreaker (table-side ORDER BY
-  // already gave each list a sensible secondary ordering), cap.
-  const merged: FeedItem[] = [...oppItems, ...healthItems];
   merged.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
   return { filter, items: merged.slice(0, FILTERED_LIMIT) };
 }
@@ -478,6 +409,182 @@ async function buildProgramsFeed(
     items,
     hotlines: hotlineResp.data ?? [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Discovery endpoints: GET /opportunities/health, GET /opportunities/by-interest
+// ---------------------------------------------------------------------------
+//
+// Both endpoints share the dual-table classifier-overlap query that powers
+// /feed?filter=*, but they shape the response differently:
+//   • /opportunities/health      → narrows HEALTH_INTEREST_TAGS to the user's
+//                                  onboarded subset (with full-set fallback).
+//   • /opportunities/by-interest → single-tag query, no exclusion, scored by
+//                                  the caller's classified_interest overlap.
+// Both return a flat list with no time buckets and no `filter` envelope.
+
+const HEALTH_DISCOVERY_LIMIT_DEFAULT = 30;
+const HEALTH_DISCOVERY_LIMIT_MAX = 60;
+const BY_INTEREST_LIMIT_DEFAULT = 20;
+const BY_INTEREST_LIMIT_MAX = 50;
+
+export interface HealthDiscoveryResponse {
+  // True when the response is narrowed to the user's onboarded health
+  // tags. False when we fell back to the full HEALTH_INTEREST_TAGS set
+  // because the user has no health tags in classified_interest. The flag
+  // lets the UI render an "expand your interests to personalize" hint.
+  personalized: boolean;
+  items: FeedItem[];
+}
+
+export interface OpportunitiesByInterestResponse {
+  interest: ClassifiedInterest;
+  items: FeedItem[];
+}
+
+export async function buildHealthDiscoveryForUser(
+  userId: string,
+  cityFilter?: string,
+  limit: number = HEALTH_DISCOVERY_LIMIT_DEFAULT,
+): Promise<HealthDiscoveryResponse> {
+  const user = await getById(userId);
+  if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
+
+  const userClassified = new Set<string>(user.classified_interest ?? []);
+  const userHealthTags = HEALTH_INTEREST_TAGS.filter((t) => userClassified.has(t));
+  const personalized = userHealthTags.length > 0;
+  const includeTags: readonly ClassifiedInterest[] = personalized
+    ? userHealthTags
+    : HEALTH_INTEREST_TAGS;
+
+  const merged = await queryClassifiedDualTable({
+    includeTags,
+    // Mirror /feed?filter=health: exclude rehabilitation tags so a row
+    // tagged {medical_care, rehabilitation} surfaces only under the
+    // rehabilitation filter, not here.
+    excludeTags: REHABILITATION_INTEREST_TAGS,
+    effectiveCity: cityFilter ?? user.city ?? null,
+    userInterestsSet: userClassified,
+    perTableLimit: FILTERED_PER_TABLE_OVERFETCH,
+  });
+  merged.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+  return {
+    personalized,
+    items: merged.slice(0, Math.min(limit, HEALTH_DISCOVERY_LIMIT_MAX)),
+  };
+}
+
+export async function buildOpportunitiesByInterest(
+  userId: string,
+  interest: ClassifiedInterest,
+  cityFilter?: string,
+  limit: number = BY_INTEREST_LIMIT_DEFAULT,
+): Promise<OpportunitiesByInterestResponse> {
+  const user = await getById(userId);
+  if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
+
+  const merged = await queryClassifiedDualTable({
+    includeTags: [interest],
+    // Caller asked for this exact tag — no exclusion. A row tagged
+    // {medical_care, rehabilitation} legitimately surfaces under both
+    // /opportunities/by-interest?interest=medical_care AND
+    // ?interest=rehabilitation; user-facing mutual exclusion is a
+    // /feed?filter concern, not a per-tag concern.
+    effectiveCity: cityFilter ?? user.city ?? null,
+    userInterestsSet: new Set<string>(user.classified_interest ?? []),
+    perTableLimit: FILTERED_PER_TABLE_OVERFETCH,
+  });
+  // Sort by match_score desc — rows that overlap the caller's other
+  // classified_interest tags float up. Rows whose only overlap is the
+  // requested tag still surface (score=1) below user-aligned matches.
+  merged.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
+  return {
+    interest,
+    items: merged.slice(0, Math.min(limit, BY_INTEREST_LIMIT_MAX)),
+  };
+}
+
+// Shared dual-table query: pulls `opportunities` (future + undated) and
+// `opportunity_health` in parallel, decorates opportunities with attendee
+// counts, scores each row by classified_interest overlap with the caller,
+// and returns merged FeedItems. Caller does the sort + cap (different
+// callers want different limits).
+interface DualTableQueryOptions {
+  includeTags: readonly ClassifiedInterest[];
+  excludeTags?: readonly ClassifiedInterest[];
+  effectiveCity: string | null;
+  userInterestsSet: Set<string>;
+  perTableLimit: number;
+}
+
+async function queryClassifiedDualTable(opts: DualTableQueryOptions): Promise<FeedItem[]> {
+  const { includeTags, excludeTags, effectiveCity, userInterestsSet, perTableLimit } = opts;
+
+  // PostgREST array literal: `{a,b,c}` (no quotes around the brace block).
+  // Used with `.not('col', 'ov', expr)` → "classified_interest does NOT
+  // overlap with any of these tags". `ov` (overlaps) is preferred over
+  // `cs` (contains-all) for exclusions because for multi-tag exclude sets
+  // we mean "exclude if ANY of these are present", not "exclude only if
+  // ALL are present" — the two coincide only for single-element sets.
+  const excludeExpr = excludeTags && excludeTags.length > 0 ? `{${excludeTags.join(',')}}` : null;
+
+  const wallNow = toWallClockUtc(new Date());
+
+  let oppQuery = supabaseAdmin
+    .from('opportunities')
+    .select('*')
+    .overlaps('classified_interest', includeTags as unknown as string[])
+    // Drop past events. Undated events (start_at IS NULL) always pass —
+    // they're "always-on" entries living in the events table.
+    .or(`start_at.is.null,start_at.gte.${wallNow}`)
+    .order('start_at', { ascending: true, nullsFirst: false })
+    .limit(perTableLimit);
+  if (excludeExpr) oppQuery = oppQuery.not('classified_interest', 'ov', excludeExpr);
+  const oppQueryFinal = effectiveCity ? oppQuery.eq('city', effectiveCity) : oppQuery;
+
+  let healthQuery = supabaseAdmin
+    .from('opportunity_health')
+    .select('*')
+    .overlaps('classified_interest', includeTags as unknown as string[])
+    .order('title', { ascending: true })
+    .limit(perTableLimit);
+  if (excludeExpr) healthQuery = healthQuery.not('classified_interest', 'ov', excludeExpr);
+  const healthQueryFinal = effectiveCity ? healthQuery.eq('city', effectiveCity) : healthQuery;
+
+  const [oppResp, healthResp] = await Promise.all([oppQueryFinal, healthQueryFinal]);
+
+  if (oppResp.error)
+    throw AppError.upstream('Failed to load filtered opportunities', oppResp.error.message);
+  if (healthResp.error)
+    throw AppError.upstream('Failed to load filtered opportunity_health', healthResp.error.message);
+
+  const oppRows = (oppResp.data ?? []) as OpportunityRow[];
+  const healthRows = (healthResp.data ?? []) as OpportunityHealthRow[];
+
+  // Decorate opportunities with attendee counts. Skipped for
+  // opportunity_health because it has visit_count built in.
+  const oppDecorations = await decorateOpportunities(oppRows);
+
+  const oppItems: FeedItem[] = oppRows.map((o) => {
+    const dec = oppDecorations.get(o.id);
+    return {
+      source: 'opportunity' as const,
+      ...serializeOpportunityTimes(o),
+      match_score: countOverlap(userInterestsSet, o.classified_interest),
+      attendee_count: dec?.attendee_count ?? 0,
+      names_visible: dec?.names_visible ?? [],
+      distance_km: null,
+    };
+  });
+
+  const healthItems: FeedItem[] = healthRows.map((h) => ({
+    source: 'opportunity_health' as const,
+    ...h,
+    match_score: countOverlap(userInterestsSet, h.classified_interest),
+    distance_km: null,
+  }));
+
+  return [...oppItems, ...healthItems];
 }
 
 function countOverlap(
