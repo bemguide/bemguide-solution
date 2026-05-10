@@ -39,6 +39,13 @@ const envSchema = z.object({
   TELEGRAM_LINK_SECRET: z.string().min(16).default('placeholder-telegram-link-secret-change-me'),
   TELEGRAM_LINK_TOKEN_TTL_SECONDS: z.coerce.number().int().positive().default(900),
 
+  // Bot ↔ backend signing secret. Used by POST /internal/event-rooms/attach to
+  // authenticate requests from the Telegram bot Edge Function. Bot signs the
+  // raw JSON body with HMAC-SHA256 hex; backend verifies with timing-safe
+  // compare. MUST be the same value on both sides (`supabase secrets set
+  // BOT_INTERNAL_SECRET=<value>` for the bot, Railway env for here).
+  BOT_INTERNAL_SECRET: z.string().min(16).default('placeholder-bot-internal-secret-change-me'),
+
   // initData freshness window per Telegram WebApp spec recommendation.
   TELEGRAM_INIT_DATA_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(86400),
 

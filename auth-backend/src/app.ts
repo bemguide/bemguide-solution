@@ -34,6 +34,9 @@ import { opportunityCheckInTokenRoute } from './routes/opportunities/check-in-to
 import { feedRoute } from './routes/feed.route.js';
 import { matchesRoute } from './routes/matches.route.js';
 
+// Bot ↔ backend internal surface (HMAC-signed, not user-facing).
+import { eventRoomsAttachRoute } from './routes/internal/event-rooms-attach.route.js';
+
 export async function buildApp(): Promise<FastifyInstance> {
   const app = Fastify({
     logger: loggerOptions,
@@ -73,6 +76,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   // Feed + matches
   await app.register(feedRoute);
   await app.register(matchesRoute);
+
+  // Internal (bot-only)
+  await app.register(eventRoomsAttachRoute);
 
   return app;
 }
