@@ -6,13 +6,18 @@ import { parseOrThrow } from '../utils/validation.js';
 import { buildFeed, buildFilteredFeed } from '../services/feed.service.js';
 
 // `filter` switches the response shape:
-//   absent       → 3 time buckets (default), opportunities only
-//   'health'     → flat list across opportunities + opportunity_health,
-//                  scoped to the health-and-therapy classified_interest set
-//   'discounts'  → flat list across both tables, scoped to discount_promotions
+//   absent           → 3 time buckets (default), opportunities only
+//   'health'         → flat list across opportunities + opportunity_health,
+//                      scoped to medical/therapy/psychology tags
+//                      (recovery, psychological_support, medical_care,
+//                      art_therapy, equine_therapy)
+//   'rehabilitation' → flat list scoped to clinical rehabilitation tag
+//                      (split out from 'health' so it surfaces as its
+//                      own user-facing category)
+//   'discounts'      → flat list across both tables, scoped to discount_promotions
 const querySchema = z.object({
   city: z.string().min(1).max(120).optional(),
-  filter: z.enum(['health', 'discounts']).optional(),
+  filter: z.enum(['health', 'rehabilitation', 'discounts']).optional(),
 });
 
 export async function feedRoute(app: FastifyInstance): Promise<void> {

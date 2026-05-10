@@ -3,6 +3,7 @@ import { AppError } from '../utils/errors.js';
 import {
   generateAiReasons,
   HEALTH_INTEREST_TAGS,
+  REHABILITATION_INTEREST_TAGS,
   DISCOUNT_INTEREST_TAGS,
   type ClassifiedInterest,
 } from './gemini.service.js';
@@ -32,7 +33,7 @@ export interface FeedResponse {
   try_new: OpportunityCard[];
 }
 
-export type FeedFilter = 'health' | 'discounts';
+export type FeedFilter = 'health' | 'rehabilitation' | 'discounts';
 
 export type FeedItem =
   | ({ source: 'opportunity' } & OpportunityCard)
@@ -278,7 +279,19 @@ const FILTERED_PER_TABLE_OVERFETCH = 60;
 
 const FILTER_TAG_SETS: Record<FeedFilter, readonly ClassifiedInterest[]> = {
   health: HEALTH_INTEREST_TAGS,
+  rehabilitation: REHABILITATION_INTEREST_TAGS,
   discounts: DISCOUNT_INTEREST_TAGS,
+};
+
+// Exclusions per filter: rows whose classified_interest intersects any of
+// these tags are dropped from the result, even if they otherwise match the
+// include set. `health` and `rehabilitation` are user-facing siblings — a
+// row tagged `rehabilitation` belongs in the rehabilitation filter only,
+// even if it also carries medical_care / psychological_support /
+// equine_therapy. Without this, e.g. "Центр реабілітації «Мальва»"
+// (`{rehabilitation, medical_care}`) would surface under both filters.
+const FILTER_EXCLUDE_TAGS: Partial<Record<FeedFilter, readonly ClassifiedInterest[]>> = {
+  health: REHABILITATION_INTEREST_TAGS,
 };
 
 export async function buildFilteredFeed(
@@ -291,8 +304,14 @@ export async function buildFilteredFeed(
 
   const effectiveCity = cityFilter ?? user.city ?? null;
   const tagSet = FILTER_TAG_SETS[filter];
-  // PostgREST array-overlap filter syntax: `ov.{a,b,c}` (not quoted)
-  const tagOverlapExpr = `{${tagSet.join(',')}}`;
+  const excludeTags = FILTER_EXCLUDE_TAGS[filter] ?? [];
+  // PostgREST array literal: `{a,b,c}` (no quotes around the brace block).
+  // Used with `.not('col', 'ov', expr)` → "classified_interest does NOT
+  // overlap with any of these tags". `ov` (overlaps) is preferred over
+  // `cs` (contains-all) for exclusions because for multi-tag exclude sets
+  // we mean "exclude if ANY of these are present", not "exclude only if
+  // ALL are present" — the two coincide only for single-element sets.
+  const excludeExpr = excludeTags.length > 0 ? `{${excludeTags.join(',')}}` : null;
 
   const userInterestsSet = new Set<string>(user.classified_interest ?? []);
 
@@ -301,7 +320,7 @@ export async function buildFilteredFeed(
   // crowd out the other.
   const wallNow = toWallClockUtc(new Date());
 
-  const oppQuery = supabaseAdmin
+  let oppQuery = supabaseAdmin
     .from('opportunities')
     .select('*')
     .overlaps('classified_interest', tagSet as unknown as string[])
@@ -310,14 +329,16 @@ export async function buildFilteredFeed(
     .or(`start_at.is.null,start_at.gte.${wallNow}`)
     .order('start_at', { ascending: true, nullsFirst: false })
     .limit(FILTERED_PER_TABLE_OVERFETCH);
+  if (excludeExpr) oppQuery = oppQuery.not('classified_interest', 'ov', excludeExpr);
   const oppQueryFinal = effectiveCity ? oppQuery.eq('city', effectiveCity) : oppQuery;
 
-  const healthQuery = supabaseAdmin
+  let healthQuery = supabaseAdmin
     .from('opportunity_health')
     .select('*')
     .overlaps('classified_interest', tagSet as unknown as string[])
     .order('title', { ascending: true })
     .limit(FILTERED_PER_TABLE_OVERFETCH);
+  if (excludeExpr) healthQuery = healthQuery.not('classified_interest', 'ov', excludeExpr);
   const healthQueryFinal = effectiveCity ? healthQuery.eq('city', effectiveCity) : healthQuery;
 
   const [oppResp, healthResp] = await Promise.all([oppQueryFinal, healthQueryFinal]);
