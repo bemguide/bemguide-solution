@@ -280,11 +280,16 @@ export function AssistantClient() {
       );
     };
 
-    // Try streaming first. If no SSE events arrive within 8s, the
+    // Try streaming first. If no SSE events arrive within 4s, the
     // proxy/WebView is buffering the response — abort and fall back
     // to buffered (await response.text() for the entire body). The
     // buffered path is slower per-turn but works on iOS Telegram
     // where progressive readable streams are unreliable.
+    //
+    // 4s is short enough that the user barely notices the fallback
+    // happen; long enough that a real but slow stream (cold OpenAI
+    // call hitting the cache miss path, ~1-3s for first token) isn't
+    // killed prematurely.
     type Mode = "stream" | "buffered";
     const MODES: Mode[] = ["stream", "buffered"];
 
@@ -293,7 +298,7 @@ export function AssistantClient() {
 
     modeLoop: for (let i = 0; i < MODES.length; i++) {
       const mode = MODES[i]!;
-      const watchdogMs = mode === "stream" ? 8_000 : 60_000;
+      const watchdogMs = mode === "stream" ? 4_000 : 30_000;
 
       const controller = new AbortController();
       abortRef.current?.abort();
