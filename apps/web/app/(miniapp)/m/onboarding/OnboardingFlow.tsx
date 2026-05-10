@@ -14,26 +14,23 @@
 //   5     health directions      localStorage: HealthPrefs.directions  ◀── only if needed=yes
 //   6     display_name+privacy   { display_name, show_name_publicly }
 //   7     interests              { interests }
-//   8     availability           { availability }
-//   9     schedule_constraints   { schedule_constraints }
-//   10    company_preference     { company_preference }
-//   11    accessibility_flags    { accessibility_flags }
-//   12    triggers_to_avoid      { triggers_to_avoid }
-//   13    veteran_status         { veteran_status }
-//   14    role_in_group          { role_in_group }
-//   15    age_range              { age_range }
-//   16    bio                    { bio }
+//   8     company_preference     { company_preference }
+//   9     accessibility_flags    { accessibility_flags }
+//   10    triggers_to_avoid      { triggers_to_avoid }
+//   11    veteran_status         { veteran_status }
+//   12    age_range              { age_range }
+//   13    bio                    { bio }
 //
 // Two flow shapes share the first three steps and then diverge on
 // the answer to step 3 (health needed?):
 //
 //   "Так" → 4, 5, done.  (5 questions total — health-only flow)
-//   "Ні"  → 6 … 16, done. (14 questions total — general flow)
+//   "Ні"  → 6 … 13, done. (11 questions total — general flow)
 //
 // Picking "Так" on step 3 means the user is here primarily for
-// health resources; the demographic/interests/availability arc isn't
-// useful to them right now and trying to drag them through it costs
-// us drop-off. The local `HealthPrefs` is enough to seed the health
+// health resources; the demographic/interests arc isn't useful to
+// them right now and trying to drag them through it costs us
+// drop-off. The local `HealthPrefs` is enough to seed the health
 // feed; everything else can stay null until the user volunteers it.
 //
 // Pre-fill from Telegram (where TG exposes it):
@@ -114,14 +111,12 @@ import {
 import {
   ACCESSIBILITY_OPTIONS,
   AGE_RANGE_OPTIONS,
-  AVAILABILITY_OPTIONS,
   COMPANY_PREFERENCE_OPTIONS,
   FONT_SIZE_OPTIONS,
   HEALTH_CATEGORY_OPTIONS,
   HEALTH_DIRECTIONS,
   INTEREST_OPTIONS,
   PALETTE_OPTIONS,
-  ROLE_IN_GROUP_OPTIONS,
   TRIGGER_OPTIONS,
   VETERAN_STATUS_OPTIONS,
   type Option,
@@ -129,7 +124,7 @@ import {
 
 // Bar counts per flow shape. The greeting (step 0) renders -1 (no bar
 // filled), so these counts are the number of *question* bars rendered.
-const TOTAL_BARS_GENERAL_FLOW = 14; // steps 1, 2, 3, 6…16
+const TOTAL_BARS_GENERAL_FLOW = 11; // steps 1, 2, 3, 6…13
 const TOTAL_BARS_HEALTH_FLOW = 5; // steps 1, 2, 3, 4, 5
 
 /**
@@ -155,10 +150,7 @@ type StepIndex =
   | 10
   | 11
   | 12
-  | 13
-  | 14
-  | 15
-  | 16;
+  | 13;
 
 const NEAREST_CITIES = [...DEMO_CITIES] as const;
 
@@ -194,14 +186,11 @@ type FormState = {
   displayName: string;
   showNamePublicly: boolean;
   interests: string[];
-  availability: string[];
-  scheduleConstraints: string;
   companyPreference: CompanyPreference;
   accessibility: AccessibilityFlag[];
   triggers: string[];
   veteranStatus: VeteranStatus | null;
   ageRange: AgeRange | null;
-  roleInGroup: string;
   bio: string;
 };
 
@@ -216,25 +205,22 @@ const initialState: FormState = {
   displayName: "",
   showNamePublicly: false,
   interests: [],
-  availability: [],
-  scheduleConstraints: "",
   companyPreference: "any",
   accessibility: [],
   triggers: [],
   veteranStatus: null,
   ageRange: null,
-  roleInGroup: "",
   bio: "",
 };
 
 /**
- * Map a global step (0..16) onto the bar index that should be filled
+ * Map a global step (0..13) onto the bar index that should be filled
  * by the time the user lands on that screen. Greeting renders -1 (no
  * bars).
  *
  * Two ranges with no overlap in real navigation:
  *   - 1..5 → bar = step - 1 (general first three + health subflow)
- *   - 6..16 → bar = step - 3 (only general flow; we skipped 4 & 5)
+ *   - 6..13 → bar = step - 3 (only general flow; we skipped 4 & 5)
  *
  * The healthYes flag isn't needed for the math — steps 4/5 and steps
  * 6+ are mutually exclusive paths, so the "step ≤ 5" branch only ever
@@ -686,17 +672,19 @@ export function OnboardingFlow() {
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => go(false, () => ({ availability: state.availability }), 9)}
+        onPrimary={() =>
+          void advance({ company_preference: state.companyPreference }, 9)
+        }
         onSkip={() => void advance({}, 9)}
       >
         <div className="space-y-2">
-          <StepHeading>Коли тобі зручно?</StepHeading>
-          <StepSubheading>Можна вибрати кілька.</StepSubheading>
+          <StepHeading>В якій компанії бути?</StepHeading>
+          <StepSubheading>Один варіант. Можна змінити будь-коли.</StepSubheading>
         </div>
-        <ChipMultiToggleGroup
-          options={AVAILABILITY_OPTIONS}
-          value={state.availability}
-          onChange={(availability) => setState({ ...state, availability })}
+        <ChipSingleToggleGroup
+          options={COMPANY_PREFERENCE_OPTIONS}
+          value={state.companyPreference}
+          onChange={(v) => v && setState({ ...state, companyPreference: v })}
         />
         {error ? <ErrorLine>{error}</ErrorLine> : null}
       </OnboardingStep>
@@ -713,26 +701,18 @@ export function OnboardingFlow() {
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
-          void advance(
-            { schedule_constraints: state.scheduleConstraints.trim() || null },
-            10,
-          )
+          void advance({ accessibility_flags: state.accessibility }, 10)
         }
         onSkip={() => void advance({}, 10)}
       >
         <div className="space-y-2">
-          <StepHeading>Що з графіку важливо врахувати?</StepHeading>
-          <StepSubheading>
-            Наприклад: маленька дитина, догляд за кимось, інші справи.
-          </StepSubheading>
+          <StepHeading>Що важливо для комфорту?</StepHeading>
+          <StepSubheading>Доступність — обери все, що для тебе має значення.</StepSubheading>
         </div>
-        <Textarea
-          value={state.scheduleConstraints}
-          maxLength={500}
-          onChange={(e) => setState({ ...state, scheduleConstraints: e.target.value })}
-          rows={4}
-          placeholder="напиши вільно — як зручно"
-          className="border-border bg-card focus-visible:border-b-primary min-h-[120px] rounded-xl border px-3 py-3 text-base"
+        <ChipMultiToggleGroup
+          options={ACCESSIBILITY_OPTIONS}
+          value={state.accessibility}
+          onChange={(accessibility) => setState({ ...state, accessibility })}
         />
         {error ? <ErrorLine>{error}</ErrorLine> : null}
       </OnboardingStep>
@@ -749,65 +729,9 @@ export function OnboardingFlow() {
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
-          void advance({ company_preference: state.companyPreference }, 11)
+          void advance({ triggers_to_avoid: state.triggers }, 11)
         }
         onSkip={() => void advance({}, 11)}
-      >
-        <div className="space-y-2">
-          <StepHeading>В якій компанії бути?</StepHeading>
-          <StepSubheading>Один варіант. Можна змінити будь-коли.</StepSubheading>
-        </div>
-        <ChipSingleToggleGroup
-          options={COMPANY_PREFERENCE_OPTIONS}
-          value={state.companyPreference}
-          onChange={(v) => v && setState({ ...state, companyPreference: v })}
-        />
-        {error ? <ErrorLine>{error}</ErrorLine> : null}
-      </OnboardingStep>
-    );
-  }
-
-  if (step === 11) {
-    return (
-      <OnboardingStep
-        step={bar(11)}
-        total={total}
-        onBack={backProp}
-        primaryLabel="Далі"
-        skipLabel="Пропустити"
-        busy={busy}
-        onPrimary={() =>
-          void advance({ accessibility_flags: state.accessibility }, 12)
-        }
-        onSkip={() => void advance({}, 12)}
-      >
-        <div className="space-y-2">
-          <StepHeading>Що важливо для комфорту?</StepHeading>
-          <StepSubheading>Доступність — обери все, що для тебе має значення.</StepSubheading>
-        </div>
-        <ChipMultiToggleGroup
-          options={ACCESSIBILITY_OPTIONS}
-          value={state.accessibility}
-          onChange={(accessibility) => setState({ ...state, accessibility })}
-        />
-        {error ? <ErrorLine>{error}</ErrorLine> : null}
-      </OnboardingStep>
-    );
-  }
-
-  if (step === 12) {
-    return (
-      <OnboardingStep
-        step={bar(12)}
-        total={total}
-        onBack={backProp}
-        primaryLabel="Далі"
-        skipLabel="Пропустити"
-        busy={busy}
-        onPrimary={() =>
-          void advance({ triggers_to_avoid: state.triggers }, 13)
-        }
-        onSkip={() => void advance({}, 13)}
       >
         <div className="space-y-2">
           <StepHeading>Тригери, яких уникати?</StepHeading>
@@ -823,17 +747,17 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 13) {
+  if (step === 11) {
     return (
       <OnboardingStep
-        step={bar(13)}
+        step={bar(11)}
         total={total}
         onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => void advance({ veteran_status: state.veteranStatus }, 14)}
-        onSkip={() => void advance({}, 14)}
+        onPrimary={() => void advance({ veteran_status: state.veteranStatus }, 12)}
+        onSkip={() => void advance({}, 12)}
       >
         <div className="space-y-2">
           <StepHeading>Який твій статус?</StepHeading>
@@ -849,48 +773,17 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 14) {
+  if (step === 12) {
     return (
       <OnboardingStep
-        step={bar(14)}
+        step={bar(12)}
         total={total}
         onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() =>
-          void advance(
-            { role_in_group: state.roleInGroup.trim() || null },
-            15,
-          )
-        }
-        onSkip={() => void advance({}, 15)}
-      >
-        <div className="space-y-2">
-          <StepHeading>Що приносиш у збір?</StepHeading>
-          <StepSubheading>Без правильних відповідей. «Просто буду» — теж валідно.</StepSubheading>
-        </div>
-        <ChipSingleToggleGroup
-          options={ROLE_IN_GROUP_OPTIONS}
-          value={state.roleInGroup || null}
-          onChange={(v) => setState({ ...state, roleInGroup: v ?? "" })}
-        />
-        {error ? <ErrorLine>{error}</ErrorLine> : null}
-      </OnboardingStep>
-    );
-  }
-
-  if (step === 15) {
-    return (
-      <OnboardingStep
-        step={bar(15)}
-        total={total}
-        onBack={backProp}
-        primaryLabel="Далі"
-        skipLabel="Пропустити"
-        busy={busy}
-        onPrimary={() => void advance({ age_range: state.ageRange }, 16)}
-        onSkip={() => void advance({}, 16)}
+        onPrimary={() => void advance({ age_range: state.ageRange }, 13)}
+        onSkip={() => void advance({}, 13)}
       >
         <div className="space-y-2">
           <StepHeading>Орієнтовний вік?</StepHeading>
@@ -906,10 +799,10 @@ export function OnboardingFlow() {
     );
   }
 
-  // step === 16
+  // step === 13
   return (
     <OnboardingStep
-      step={bar(16)}
+      step={bar(13)}
       total={total}
       primaryLabel="Готово"
       skipLabel="Пропустити"

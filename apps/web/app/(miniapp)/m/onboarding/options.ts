@@ -103,16 +103,6 @@ export const INTEREST_OPTIONS: Option<string>[] = [
   { value: "family", label: "З родиною" },
 ];
 
-// Q4 — availability (multi). User picks the rhythm; we don't match on
-// this today, but we feed it to Gemini for ai_reason and store for
-// future filtering.
-export const AVAILABILITY_OPTIONS: Option<string>[] = [
-  { value: "today_tomorrow", label: "Сьогодні / завтра" },
-  { value: "weekday_evenings", label: "Будні ввечері" },
-  { value: "weekends", label: "Вихідні" },
-  { value: "this_month_flexible", label: "Цього місяця, не поспішаю" },
-];
-
 // Q6 — company preference (single). Backend enum.
 export const COMPANY_PREFERENCE_OPTIONS: Option<CompanyPreference>[] = [
   { value: "with_partner", label: "З партнером" },
@@ -161,16 +151,6 @@ export const VETERAN_STATUS_OPTIONS: Option<VeteranStatus>[] = [
   { value: "civilian_affected", label: "Постраждалий цивільний" },
   { value: "volunteer", label: "Волонтер" },
   { value: "no_docs", label: "Без документів" },
-];
-
-// Q10 — role in group (single). Backend stores as plain text.
-export const ROLE_IN_GROUP_OPTIONS: Option<string>[] = [
-  { value: "calm_presence", label: "Спокійна присутність — просто буду" },
-  { value: "listener", label: "Слухаю — мене легко розговорити" },
-  { value: "driver", label: "Маю авто — можу підвезти" },
-  { value: "host", label: "Знаю місце — обіцяю мати ідею, де" },
-  { value: "initiative", label: "Можу запропонувати — не боюся ініціативи" },
-  { value: "messenger", label: "Перші повідомлення — напишу першим" },
 ];
 
 // Q11 — age range (single). Backend enum.
