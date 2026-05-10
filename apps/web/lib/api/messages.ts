@@ -9,7 +9,13 @@ const TELEGRAM_DOWN = "Сервіс тимчасово не відповідає
 const NEEDS_TG = "Відкрий додаток у Telegram, щоб продовжити.";
 const SESSION_LOST = "Сесія завершилась. Закрий і відкрий додаток ще раз.";
 
-export type ErrorContext = "feed" | "rsvp" | "onboarding" | "propose" | "default";
+export type ErrorContext =
+  | "feed"
+  | "rsvp"
+  | "onboarding"
+  | "propose"
+  | "check-in"
+  | "default";
 
 /**
  * Translate any thrown value into a UA string fit for a toast / inline
@@ -65,6 +71,14 @@ export function describeError(e: unknown, ctx: ErrorContext = "default"): string
     case "rate_limited":
       return "Забагато запитів. Зачекай хвилинку.";
 
+    // Check-in surface — backend only allows admins or the event's tracked
+    // organizer (opportunities.created_by == req.user.id). Any other authed
+    // caller hits 403 'forbidden' with this message.
+    case "forbidden":
+      return ctx === "check-in"
+        ? "Бекенд не визнає тебе організатором цієї події. Якщо подія твоя — попроси адміна вписати твій user_id у opportunities.created_by."
+        : "Немає доступу.";
+
     // Backend infra.
     case "upstream":
     case "internal":
@@ -73,7 +87,11 @@ export function describeError(e: unknown, ctx: ErrorContext = "default"): string
 
   // Fall back to status code.
   if (e.status === 401) return SESSION_LOST;
-  if (e.status === 403) return "Немає доступу.";
+  if (e.status === 403) {
+    return ctx === "check-in"
+      ? "Бекенд не визнає тебе організатором цієї події."
+      : "Немає доступу.";
+  }
   if (e.status === 404) return "Не знайдено.";
   if (e.status === 409) return "Конфлікт. Перезавантаж сторінку.";
   if (e.status === 429) return "Забагато запитів. Зачекай хвилинку.";

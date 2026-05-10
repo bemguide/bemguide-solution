@@ -1,29 +1,26 @@
 // Organizer-side controls on /m/event/[id]. Two sub-sections:
 //
 //   1. **Чат події** — tap "Створити / прив'язати чат" to open
-//      Telegram's add-to-group picker with `?startgroup=evt_<id>`.
+//      Telegram's add-to-group picker with `?startgroup=event_<id>`.
 //      User picks the group they already created, the bot joins with
-//      `evt_<id>` as start payload, the bot calls
+//      `event_<id>` as start payload, the bot calls
 //      `POST /internal/event-rooms/attach` with the right event_id +
 //      the chat_id it just joined.
 //
-//      Without this hand-off the bot has no way to know which event
-//      a freshly-joined chat is for, so nothing was happening when
-//      organizers manually added the bot — the start payload is the
-//      missing breadcrumb.
+//   2. **Реєстрація учасників** — QR scanner that calls
+//      `POST /opportunities/:id/check-in`. Backend authz is strict:
+//      only admins or the user whose `id` matches `opportunities.
+//      created_by` are accepted. Anything else → 403 'forbidden'.
 //
-//      The chat-already-exists case shows "Відкрити чат" pulling
-//      `room.chat_invite_url` (same source as AttendingBar) so the
-//      organizer doesn't need to RSVP into their own event just to
-//      reach the chat. `null` when chat isn't bound yet — Telegram
-//      will route the picker to wherever the user already added the
-//      bot so re-running the action is idempotent.
+// Visibility uses a two-layer gate:
 //
-//   2. **Реєстрація учасників** — QR scanner unchanged.
-//
-// Whole section is gated on a heuristic (viewer's @username matches
-// `organizer_contact`). Replace with a backend-tracked
-// `created_by_user_id` check when that lands.
+//   - `isOrganizerByDb` — backend truth: `event.created_by === me.id`.
+//     This is what the check-in route actually checks.
+//   - `isOrganizerByHeuristic` — viewer's @TG-username matches
+//     `organizer_contact`. Useful only as a fallback for legacy events
+//     where `created_by` is null (a row predates migration 0013) — we
+//     still show the section so the organizer has a path, but with a
+//     warning that scans will likely 403 until someone backfills.
 
 "use client";
 
@@ -33,9 +30,11 @@ import { Button } from "@/components/ui/button";
 import {
   ApiError,
   describeError,
+  getCurrentUser,
   logApiError,
   verifyCheckIn,
   type V2EventRoom,
+  type V2User,
 } from "@/lib/api";
 import { buildCreateChatUrl } from "@/lib/share";
 import { getTgUserWithWait, tgScanQr } from "@/lib/telegram/client";
@@ -62,31 +61,50 @@ function isOrganizerMatch(contact: string | null, tgUsername: string | null): bo
 export function OrganizerCheckIn({
   eventId,
   organizerContact,
+  createdBy,
   room,
 }: {
   eventId: string;
   organizerContact: string | null;
+  /** Backend's tracked organizer. `null` for legacy events that
+   *  pre-date migration 0013 — those rows can never pass the
+   *  check-in route's authz without a manual backfill. */
+  createdBy: string | null;
   /** Same room data the AttendingBar uses. May be null when the
    *  organizer hasn't RSVPed (and so /room 403'd). */
   room: V2EventRoom | null;
 }) {
   const [tgUsername, setTgUsername] = useState<string | null>(null);
+  const [me, setMe] = useState<V2User | null>(null);
   const [result, setResult] = useState<Result>({ kind: "idle" });
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const tg = await getTgUserWithWait();
-      if (!cancelled) setTgUsername(tg.username ?? null);
+      const [tg, currentUser] = await Promise.all([
+        getTgUserWithWait(),
+        getCurrentUser().catch(() => null),
+      ]);
+      if (cancelled) return;
+      setTgUsername(tg.username ?? null);
+      setMe(currentUser);
     })();
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const visible = isOrganizerMatch(organizerContact, tgUsername);
+  const isOrganizerByDb = createdBy !== null && me !== null && createdBy === me.id;
+  const isOrganizerByHeuristic = isOrganizerMatch(organizerContact, tgUsername);
+
+  // Show the section if either signal matches. The backend will only
+  // accept scans from `isOrganizerByDb`, but the heuristic still
+  // catches legacy events where `created_by` is null and is the only
+  // way the organizer has access until somebody backfills.
+  const visible = isOrganizerByDb || isOrganizerByHeuristic;
   if (!visible) return null;
 
+  const willCheckInWork = isOrganizerByDb;
   const createChatUrl = buildCreateChatUrl(eventId);
   const chatInviteUrl = room?.chat_invite_url ?? null;
 
@@ -108,7 +126,7 @@ export function OrganizerCheckIn({
         setResult({ kind: "not-implemented" });
         return;
       }
-      setResult({ kind: "fail", message: describeError(e) });
+      setResult({ kind: "fail", message: describeError(e, "check-in") });
     }
   }
 
@@ -118,7 +136,14 @@ export function OrganizerCheckIn({
 
       <ChatBlock createChatUrl={createChatUrl} chatInviteUrl={chatInviteUrl} />
 
-      <ScannerBlock result={result} onScan={() => void onScan()} />
+      <ScannerBlock
+        result={result}
+        onScan={() => void onScan()}
+        willCheckInWork={willCheckInWork}
+        createdBy={createdBy}
+        meId={me?.id ?? null}
+        eventId={eventId}
+      />
     </section>
   );
 }
@@ -177,15 +202,30 @@ function ChatBlock({
 function ScannerBlock({
   result,
   onScan,
+  willCheckInWork,
+  createdBy,
+  meId,
+  eventId,
 }: {
   result: Result;
   onScan: () => void;
+  /** Backend's authz check (admin OR `created_by === me.id`) will pass.
+   *  `false` means the user matches our heuristic but the backend
+   *  doesn't have them as the row's organizer. Scans will 403. */
+  willCheckInWork: boolean;
+  createdBy: string | null;
+  meId: string | null;
+  eventId: string;
 }) {
   return (
     <div className="space-y-2">
       <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
         Реєстрація учасників
       </p>
+
+      {!willCheckInWork ? (
+        <PreflightWarning createdBy={createdBy} meId={meId} eventId={eventId} />
+      ) : null}
 
       <Button
         type="button"
@@ -204,6 +244,40 @@ function ScannerBlock({
       </Button>
 
       <ResultLine result={result} />
+    </div>
+  );
+}
+
+function PreflightWarning({
+  createdBy,
+  meId,
+  eventId,
+}: {
+  createdBy: string | null;
+  meId: string | null;
+  eventId: string;
+}) {
+  // Two distinct shapes:
+  //   - createdBy is null → row was created before migration 0013 ran
+  //     on prod. Need someone to backfill.
+  //   - createdBy is set but != me → the event was created from a
+  //     different account (e.g. admin seed, or a different TG login).
+  const reason = createdBy === null
+    ? "Бекенд не знає, хто створив цю подію (поле created_by порожнє — стара подія)."
+    : "Бекенд бачить тебе як іншого користувача, ніж того, хто створив подію.";
+  return (
+    <div className="bg-destructive/5 text-destructive rounded-md border border-destructive/30 px-3 py-2 text-xs leading-snug">
+      <p className="font-semibold">Скан зараз не працюватиме.</p>
+      <p>{reason}</p>
+      {meId ? (
+        <p className="text-muted-foreground mt-1 break-all">
+          Швидкий фікс: у Supabase виконай
+          {" "}
+          <code className="text-foreground">
+            update opportunities set created_by = &apos;{meId}&apos; where id = &apos;{eventId}&apos;;
+          </code>
+        </p>
+      ) : null}
     </div>
   );
 }

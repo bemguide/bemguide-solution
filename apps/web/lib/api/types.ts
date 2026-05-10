@@ -148,6 +148,14 @@ export type V2Opportunity = {
   target_identity_pref: IdentityPref;
   /** [] = no preference. Multi-select. */
   target_veteran_status: VeteranStatus[];
+  /**
+   * The user who created/organizes the event. Authorises organizer-only
+   * routes — most importantly `POST /opportunities/:id/check-in` (the QR
+   * scanner). `null` for ~146 legacy rows that pre-date migration 0013;
+   * those events can't be scanner-managed unless someone backfills the
+   * column manually.
+   */
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -212,16 +212,17 @@ export function ClientEventPage({ id }: { id: string }) {
         </section>
       ) : null}
 
-      {/* Organizer-only — heuristic: their TG @username matches the
-          organizer_contact field. Backend doesn't yet store creator
-          on the row, so this is the closest "is this user running
-          the event?" signal we have client-side. We pass the same
-          `room` data AttendingBar uses so the organizer can reach
-          the chat (Відкрити чат) without RSVPing into their own
-          event. */}
+      {/* Organizer-only. Visibility uses two signals (see
+          OrganizerCheckIn): backend truth `event.created_by ===
+          me.id` (what /check-in actually checks), with a heuristic
+          fallback (TG @username matches organizer_contact) for the
+          legacy `created_by IS NULL` rows. Same `room` data the
+          AttendingBar uses so the organizer can reach the chat
+          without RSVPing into their own event. */}
       <OrganizerCheckIn
         eventId={event.id}
         organizerContact={event.organizer_contact}
+        createdBy={event.created_by ?? null}
         room={attending.kind === "yes" ? attending.room : null}
       />
 
