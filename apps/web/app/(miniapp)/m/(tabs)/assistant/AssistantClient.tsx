@@ -36,11 +36,13 @@ import { cn } from "@/lib/utils";
 import {
   AgentApiError,
   type AgentCitation,
+  type AgentSseEvent,
   type CrisisCardData,
   clearConversationId,
   getAgentBaseUrl,
   readConversationId,
   streamChat,
+  streamChatBuffered,
   writeConversationId,
 } from "@/lib/agent";
 import { getCurrentUser, isNoTelegramEnv, logApiError } from "@/lib/api";
@@ -166,6 +168,7 @@ export function AssistantClient() {
     if (!me || pending) return;
     const trimmed = text.trim();
     if (!trimmed) return;
+    const meId = me.id;
 
     const userMsg: ChatMessage = { id: newId(), role: "user", text: trimmed };
     const assistantId = newId();
@@ -181,176 +184,225 @@ export function AssistantClient() {
     setDraft("");
     setPending(true);
 
-    const controller = new AbortController();
-    abortRef.current?.abort();
-    abortRef.current = controller;
-
-    // Try with the stored convId; if the V0 server has forgotten it
-    // (in-memory store on a fresh process), clear and retry once.
-    let convId = readConversationId(me.id);
+    let convId = readConversationId(meId);
     let attempted404Recovery = false;
 
-    // Watchdog: if no SSE event arrives within 25s of opening the
-    // request, abort. Some Telegram WebView configurations buffer
-    // streamed responses to completion (or seemingly never) — without
-    // this, the user is stuck on the typing dots forever. The error
-    // path below renders an actionable "не відповідає" message they
-    // can retry from. 25s gives Railway's worst-case dyno spin-up
-    // time (~20s on a cold start) plus a small safety margin.
-    let watchdog: ReturnType<typeof setTimeout> | null = null;
-    const armWatchdog = () => {
-      clearWatchdog();
-      watchdog = setTimeout(() => {
-        watchdog = null;
-        controller.abort();
-      }, 25_000);
+    // Reset the in-flight assistant bubble — used when we fall back
+    // from streaming to buffered mode and want to start "fresh"
+    // (avoids interleaving any partial pre-fallback render).
+    const resetAssistantBubble = () => {
+      setMessages((m) =>
+        m.map((msg) =>
+          msg.id === assistantId && msg.role === "assistant"
+            ? {
+                ...msg,
+                text: "",
+                citations: [],
+                pending: true,
+                error: undefined,
+              }
+            : msg,
+        ),
+      );
     };
-    const clearWatchdog = () => {
-      if (watchdog !== null) {
-        clearTimeout(watchdog);
-        watchdog = null;
+
+    // Centralised event handler — both stream and buffered modes
+    // route every parsed `AgentSseEvent` through here so the
+    // rendering logic only lives in one place.
+    const applyEvent = (evt: AgentSseEvent) => {
+      if (evt.event === "conversation") {
+        convId = evt.data.conversation_id;
+        writeConversationId(meId, evt.data.conversation_id);
+        return;
+      }
+      if (evt.event === "token") {
+        const piece = evt.data.text;
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId && msg.role === "assistant"
+              ? { ...msg, text: msg.text + piece }
+              : msg,
+          ),
+        );
+        return;
+      }
+      if (evt.event === "citation") {
+        const citation = evt.data;
+        setMessages((m) =>
+          m.map((msg) => {
+            if (msg.id !== assistantId || msg.role !== "assistant") return msg;
+            if (msg.citations.some((c) => c.id === citation.id)) return msg;
+            return { ...msg, citations: [...msg.citations, citation] };
+          }),
+        );
+        return;
+      }
+      if (evt.event === "action") {
+        if (evt.data.kind === "crisis_handoff") {
+          const card = (evt.data as { card: CrisisCardData }).card;
+          setCrisis(card);
+          setMessages((m) => m.filter((msg) => msg.id !== assistantId));
+        }
+        return;
+      }
+      if (evt.event === "done") {
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId && msg.role === "assistant"
+              ? { ...msg, pending: false }
+              : msg,
+          ),
+        );
+        return;
+      }
+      if (evt.event === "error") {
+        setMessages((m) =>
+          m.map((msg) =>
+            msg.id === assistantId && msg.role === "assistant"
+              ? {
+                  ...msg,
+                  pending: false,
+                  error: "Щось пішло не так. Спробуй ще раз — і я знову поруч.",
+                }
+              : msg,
+          ),
+        );
       }
     };
-    armWatchdog();
-    let timedOut = false;
-    controller.signal.addEventListener(
-      "abort",
-      () => {
-        if (watchdog === null) timedOut = true;
-      },
-      { once: true },
-    );
 
-    runStream: while (true) {
-      try {
-        for await (const evt of streamChat({
-          userId: me.id,
-          conversationId: convId,
-          userMessage: trimmed,
-          signal: controller.signal,
-        })) {
-          if (controller.signal.aborted) break runStream;
-          // Reset the watchdog on every event — the stream is alive.
-          armWatchdog();
+    const setBubbleError = (errMsg: string) => {
+      setMessages((m) =>
+        m.map((mm) =>
+          mm.id === assistantId && mm.role === "assistant"
+            ? { ...mm, pending: false, error: errMsg }
+            : mm,
+        ),
+      );
+    };
 
-          if (evt.event === "conversation") {
-            convId = evt.data.conversation_id;
-            writeConversationId(me.id, evt.data.conversation_id);
-            continue;
-          }
-          if (evt.event === "token") {
-            const piece = evt.data.text;
-            setMessages((m) =>
-              m.map((msg) =>
-                msg.id === assistantId && msg.role === "assistant"
-                  ? { ...msg, text: msg.text + piece }
-                  : msg,
-              ),
-            );
-            continue;
-          }
-          if (evt.event === "citation") {
-            const citation = evt.data;
-            setMessages((m) =>
-              m.map((msg) => {
-                if (msg.id !== assistantId || msg.role !== "assistant") return msg;
-                if (msg.citations.some((c) => c.id === citation.id)) return msg;
-                return { ...msg, citations: [...msg.citations, citation] };
-              }),
-            );
-            continue;
-          }
-          if (evt.event === "action") {
-            if (evt.data.kind === "crisis_handoff") {
-              const card = (evt.data as { card: CrisisCardData }).card;
-              setCrisis(card);
-              // Drop the in-flight assistant bubble — the card replaces it.
-              setMessages((m) => m.filter((msg) => msg.id !== assistantId));
-            }
-            // Unknown action kinds are no-ops per spec.
-            continue;
-          }
-          if (evt.event === "done") {
-            setMessages((m) =>
-              m.map((msg) =>
-                msg.id === assistantId && msg.role === "assistant"
-                  ? { ...msg, pending: false }
-                  : msg,
-              ),
-            );
-            continue;
-          }
-          if (evt.event === "error") {
-            setMessages((m) =>
-              m.map((msg) =>
-                msg.id === assistantId && msg.role === "assistant"
-                  ? {
-                      ...msg,
-                      pending: false,
-                      error:
-                        "Щось пішло не так. Спробуй ще раз — і я знову поруч.",
-                    }
-                  : msg,
-              ),
-            );
-          }
+    // Try streaming first. If no SSE events arrive within 8s, the
+    // proxy/WebView is buffering the response — abort and fall back
+    // to buffered (await response.text() for the entire body). The
+    // buffered path is slower per-turn but works on iOS Telegram
+    // where progressive readable streams are unreliable.
+    type Mode = "stream" | "buffered";
+    const MODES: Mode[] = ["stream", "buffered"];
+
+    let success = false;
+    let userAborted = false;
+
+    modeLoop: for (let i = 0; i < MODES.length; i++) {
+      const mode = MODES[i]!;
+      const watchdogMs = mode === "stream" ? 8_000 : 60_000;
+
+      const controller = new AbortController();
+      abortRef.current?.abort();
+      abortRef.current = controller;
+
+      let watchdogFired = false;
+      let watchdog: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        watchdog = null;
+        watchdogFired = true;
+        controller.abort();
+      }, watchdogMs);
+      const clearWatchdog = () => {
+        if (watchdog !== null) {
+          clearTimeout(watchdog);
+          watchdog = null;
         }
-        break runStream;
-      } catch (err) {
-        if ((err as { name?: string } | null)?.name === "AbortError") {
-          // Distinguish a watchdog timeout from a deliberate abort
-          // (component unmount, new send()). Watchdog → user-visible
-          // error so they can retry. Real abort → silent.
-          if (timedOut) {
-            setMessages((m) =>
-              m.map((mm) =>
-                mm.id === assistantId && mm.role === "assistant"
-                  ? {
-                      ...mm,
-                      pending: false,
-                      error:
-                        "Помічник не відповідає. Спробуй ще раз — зазвичай це проходить з другого разу.",
-                    }
-                  : mm,
-              ),
-            );
+      };
+      const armWatchdog = () => {
+        clearWatchdog();
+        watchdog = setTimeout(() => {
+          watchdog = null;
+          watchdogFired = true;
+          controller.abort();
+        }, watchdogMs);
+      };
+
+      if (mode === "buffered" && i > 0) {
+        resetAssistantBubble();
+      }
+
+      try {
+        const iter =
+          mode === "stream"
+            ? streamChat({
+                userId: meId,
+                conversationId: convId,
+                userMessage: trimmed,
+                signal: controller.signal,
+              })
+            : streamChatBuffered({
+                userId: meId,
+                conversationId: convId,
+                userMessage: trimmed,
+                signal: controller.signal,
+              });
+
+        for await (const evt of iter) {
+          if (controller.signal.aborted) break;
+          // Reset the watchdog on every received event in stream
+          // mode — a slow but flowing stream stays alive. In
+          // buffered mode the iterator yields the full event list
+          // synchronously after the body lands, so resetting is a
+          // no-op there.
+          if (mode === "stream") armWatchdog();
+          applyEvent(evt);
+        }
+        clearWatchdog();
+        if (controller.signal.aborted) {
+          if (watchdogFired) {
+            // Stream → buffered fallback. Buffered → give up.
+            if (mode === "stream") continue modeLoop;
+            break modeLoop;
           }
-          break runStream;
+          // External abort (component unmount, new send()).
+          userAborted = true;
+          break modeLoop;
+        }
+        success = true;
+        break modeLoop;
+      } catch (err) {
+        clearWatchdog();
+        if ((err as { name?: string } | null)?.name === "AbortError") {
+          if (watchdogFired) {
+            if (mode === "stream") continue modeLoop;
+            break modeLoop;
+          }
+          userAborted = true;
+          break modeLoop;
         }
         if (
           err instanceof AgentApiError &&
           err.status === 404 &&
           !attempted404Recovery
         ) {
-          // V0 backend restarted and lost our conversation. Drop the
-          // stale id and retry once, silently — the user shouldn't
-          // see a 404 just because a process bounced.
+          // Stale conv_id — server forgot it. Drop and retry the
+          // same mode with a fresh conversation.
           attempted404Recovery = true;
-          clearConversationId(me.id);
+          clearConversationId(meId);
           convId = null;
-          // Re-arm the watchdog for the retry — the previous timer
-          // already fired/was cleared by the catch path.
-          armWatchdog();
-          continue runStream;
+          i--;
+          continue modeLoop;
         }
-        logApiError("assistant.stream", err);
+        logApiError(`assistant.${mode}`, err);
         const msg =
           err instanceof AgentApiError && err.status === 0
             ? "Помічник не відповідає. Перевір зʼєднання."
             : "Щось пішло не так. Спробуй ще раз.";
-        setMessages((m) =>
-          m.map((mm) =>
-            mm.id === assistantId && mm.role === "assistant"
-              ? { ...mm, pending: false, error: msg }
-              : mm,
-          ),
-        );
-        break runStream;
+        setBubbleError(msg);
+        break modeLoop;
       }
     }
 
-    clearWatchdog();
-    if (abortRef.current === controller) abortRef.current = null;
+    if (!success && !userAborted) {
+      setBubbleError(
+        "Помічник не відповідає. Спробуй ще раз — зазвичай це проходить з другого разу.",
+      );
+    }
+
+    abortRef.current = null;
     setPending(false);
   }
 

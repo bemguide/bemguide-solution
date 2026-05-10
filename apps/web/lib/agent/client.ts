@@ -173,6 +173,105 @@ export async function* streamChat({
 }
 
 // ----------------------------------------------------------------
+// Buffered fallback — for when the streamed body never delivers
+// ----------------------------------------------------------------
+
+/**
+ * Same `/v1/agent/messages` POST as `streamChat`, but waits for the
+ * full response body via `response.text()` and parses all SSE frames
+ * at once. This is the iOS WebView / aggressive-buffering-proxy
+ * fallback: the network layer holds bytes until the connection
+ * closes, then `response.text()` returns the entire payload at once.
+ *
+ * Trade-off: no progressive token rendering — the user sees nothing
+ * during generation, then everything in rapid sequence. Worth it
+ * compared to an infinite spinner, and short enough at 600 max
+ * tokens (~3-5s on gpt-4o-mini) that it doesn't feel broken.
+ *
+ * Yields the parsed SSE frames in their original order, so the
+ * caller's existing event-handling switch works without changes.
+ */
+export async function* streamChatBuffered({
+  userId,
+  conversationId,
+  userMessage,
+  signal,
+}: {
+  userId: string;
+  conversationId: string | null;
+  userMessage: string;
+  signal?: AbortSignal;
+}): AsyncGenerator<AgentSseEvent, void, unknown> {
+  const base = requireBaseUrl();
+  const url = `${base}/v1/agent/messages?${authQueryString(userId)}`;
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+      },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        user_message: userMessage,
+      }),
+      cache: "no-store",
+      signal,
+    });
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name === "AbortError") throw err;
+    throw new AgentApiError(
+      "network",
+      (err as Error)?.message ?? "Network error",
+      0,
+    );
+  }
+
+  if (!resp.ok) {
+    let body: { error?: string; message?: string } = {};
+    try {
+      body = (await resp.json()) as { error?: string; message?: string };
+    } catch {
+      /* non-JSON */
+    }
+    throw new AgentApiError(
+      body.error ?? "http_error",
+      body.message ?? resp.statusText,
+      resp.status,
+    );
+  }
+
+  const text = await resp.text();
+  // Parse the same `event:` / `data:` framing the streaming path
+  // walks — the body shape is identical, we just got it all at once.
+  for (const rawFrame of text.split("\n\n")) {
+    const frame = rawFrame.trim();
+    if (!frame) continue;
+
+    let eventName = "message";
+    let dataLine = "";
+    for (const line of frame.split("\n")) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLine += line.slice(5).trim();
+      }
+    }
+    if (!dataLine) continue;
+    try {
+      yield {
+        event: eventName,
+        data: JSON.parse(dataLine),
+      } as AgentSseEvent;
+    } catch {
+      /* malformed frame — same handling as streaming path */
+    }
+  }
+}
+
+// ----------------------------------------------------------------
 // Non-streaming endpoints
 // ----------------------------------------------------------------
 

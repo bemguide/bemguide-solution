@@ -10,6 +10,7 @@ export {
   listConversations,
   listFacts,
   streamChat,
+  streamChatBuffered,
 } from "./client";
 export {
   clearConversationId,
