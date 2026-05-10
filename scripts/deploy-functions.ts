@@ -4,7 +4,8 @@
 // Requires:
 //   SUPABASE_ACCESS_TOKEN  – Personal Access Token from supabase.com/dashboard/account/tokens
 //   SUPABASE_URL           – used to derive project-ref
-//   GEMINI_API_KEY, TELEGRAM_*, NEXT_PUBLIC_APP_URL, VERCEL_CRON_SECRET
+//   GEMINI_API_KEY, TELEGRAM_*, NEXT_PUBLIC_APP_URL, VERCEL_CRON_SECRET,
+//   BACKEND_BASE_URL, BOT_INTERNAL_SECRET
 //                          – pushed as secrets to the Supabase project
 //
 // Reserved env vars (SUPABASE_URL, *_KEY, SUPABASE_DB_URL) are NOT pushed —
@@ -23,6 +24,7 @@ const FUNCTIONS = [
   "gemini-copy",
 ] as const;
 
+// Required secrets — must be present in .env.local; deploy fails fast if not.
 const SECRETS_TO_PUSH = [
   "GEMINI_API_KEY",
   "TELEGRAM_BOT_TOKEN",
@@ -30,6 +32,20 @@ const SECRETS_TO_PUSH = [
   "TELEGRAM_WEBHOOK_SECRET",
   "NEXT_PUBLIC_APP_URL",
   "VERCEL_CRON_SECRET",
+] as const;
+
+// Optional secrets — only pushed when present. Lets the deploy succeed
+// when newer features (event-chat attach) aren't yet configured locally.
+// Keep this list narrow: missing-but-required secrets should still
+// surface as a hard error via SECRETS_TO_PUSH.
+const OPTIONAL_SECRETS_TO_PUSH = [
+  // Event-chat attach flow (bot/handleGroupAddedForEvent → backend
+  // /internal/event-rooms/attach). Without these the bot stays silent
+  // when added to an event group via the Mini App's `?startgroup=`
+  // deep-link, because env.backendBaseUrl() / env.botInternalSecret()
+  // throw on the very first call.
+  "BACKEND_BASE_URL",
+  "BOT_INTERNAL_SECRET",
 ] as const;
 
 const url = process.env.SUPABASE_URL;
@@ -57,12 +73,25 @@ function run(cmd: string) {
 // 1. Sync secrets
 console.log(`→ Pushing secrets to ${projectRef}…`);
 const secretArgs: string[] = [];
+const escape = (v: string) => `'${v.replace(/'/g, `'\\''`)}'`;
 for (const key of SECRETS_TO_PUSH) {
   const value = process.env[key];
   if (!value) throw new Error(`Missing env var to push: ${key}`);
-  // shell-escape: wrap in single quotes, escape any embedded single quotes
-  const escaped = `'${value.replace(/'/g, `'\\''`)}'`;
-  secretArgs.push(`${key}=${escaped}`);
+  secretArgs.push(`${key}=${escape(value)}`);
+}
+const skippedOptional: string[] = [];
+for (const key of OPTIONAL_SECRETS_TO_PUSH) {
+  const value = process.env[key];
+  if (!value) {
+    skippedOptional.push(key);
+    continue;
+  }
+  secretArgs.push(`${key}=${escape(value)}`);
+}
+if (skippedOptional.length > 0) {
+  console.log(
+    `  (skipped optional, not in .env.local: ${skippedOptional.join(", ")})`,
+  );
 }
 run(`supabase secrets set --project-ref ${projectRef} ${secretArgs.join(" ")}`);
 

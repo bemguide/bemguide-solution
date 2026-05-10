@@ -118,7 +118,16 @@ bot.command("start", async (ctx) => {
     if (param.startsWith("event_")) {
       return handleGroupAddedForEvent(ctx, param.slice(6));
     }
-    return; // unknown deep-link param in a group context; stay silent
+    // No event_<id> on the deep-link → either the user added the bot
+    // manually, or they typed /start@bot to check the bot is alive.
+    // Send a help message instead of staying silent: silence reads as
+    // "the bot is broken", and the lost minute of triage every time
+    // an admin tests the bot in a fresh group adds up fast.
+    return ctx.reply(
+      "Привіт. Щоб прив'язати цей чат до події — поверніться в Просвіт " +
+        "і натисніть «Створити чат» на картці потрібної події. Я з'явлюся " +
+        "тут автоматично і збережу посилання.",
+    );
   }
 
   // Normalise/upsert the veteran by tg_user_id. We capture only display_name on
