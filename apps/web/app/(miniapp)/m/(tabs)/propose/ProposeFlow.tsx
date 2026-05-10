@@ -54,6 +54,7 @@ import {
 } from "@poruch/shared";
 import { createOpportunity, describeError, getCurrentUser, logApiError } from "@/lib/api";
 import {
+  getTgUserWithWait,
   tgGetLocation,
   tgLocationDenied,
   tgOpenLocationSettings,
@@ -162,14 +163,30 @@ export function ProposeFlow() {
   // ref so the geocode effect doesn't re-run on every keystroke.
   const addressTouchedRef = useRef(false);
 
-  // Pre-fill the city from the user's profile.
+  // Pre-fill from the user's profile + Telegram identity:
+  //   - city ← /me.city (defaults to ENABLED_CITY otherwise)
+  //   - organizerContact ← @<tg_username> so the creator is the
+  //     default organizer. Backend doesn't track creator → organizer
+  //     in the DB, so this is the closest we can get to "you are
+  //     the organizer of what you create" until that link lands.
+  //     User can still type over it if delegating to someone else.
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const me = await getCurrentUser().catch(() => null);
+        const [me, tg] = await Promise.all([
+          getCurrentUser().catch(() => null),
+          getTgUserWithWait(),
+        ]);
         if (cancelled) return;
-        if (me?.city) setForm((f) => ({ ...f, city: me.city ?? DEFAULT_CITY }));
+        setForm((f) => {
+          let next = f;
+          if (me?.city) next = { ...next, city: me.city ?? DEFAULT_CITY };
+          if (tg.username && !next.organizerContact.trim()) {
+            next = { ...next, organizerContact: `@${tg.username}` };
+          }
+          return next;
+        });
       } catch {
         // ignore — falls back to defaults.
       }

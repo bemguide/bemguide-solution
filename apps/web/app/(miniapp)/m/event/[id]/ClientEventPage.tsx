@@ -234,12 +234,18 @@ function startedAlready(startAt: string | null): boolean {
 
 /**
  * `organizer_contact` is free text on the backend — could be plain prose,
- * a Telegram handle, a phone, an email, or "label · https://very/long/url".
- * We extract the first URL when there is one and show only the host as a
- * tappable link; otherwise fall back to autolinking the raw text.
+ * a Telegram handle (`@username`), a phone, an email, or
+ * "label · https://very/long/url". Render in this priority order:
+ *   1. Embedded URL → host-only link via prettyUrlHost.
+ *   2. Bare TG handle (`@username`) → t.me/<username> link, label keeps `@`.
+ *   3. Anything else → Autolink (linkifies any URLs inside, leaves
+ *      the rest as plain text).
  */
+const TG_HANDLE_RE = /^@([a-zA-Z][a-zA-Z0-9_]{3,31})$/;
+
 function OrganizerLine({ raw }: { raw: string }) {
-  const url = extractFirstUrl(raw);
+  const trimmed = raw.trim();
+  const url = extractFirstUrl(trimmed);
   if (url) {
     return (
       <a
@@ -249,6 +255,19 @@ function OrganizerLine({ raw }: { raw: string }) {
         className="text-primary inline-flex items-center break-words text-base underline underline-offset-2 hover:no-underline"
       >
         {prettyUrlHost(url)}
+      </a>
+    );
+  }
+  const tgMatch = trimmed.match(TG_HANDLE_RE);
+  if (tgMatch) {
+    return (
+      <a
+        href={`https://t.me/${tgMatch[1]}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-primary inline-flex items-center text-base underline underline-offset-2 hover:no-underline"
+      >
+        @{tgMatch[1]}
       </a>
     );
   }
