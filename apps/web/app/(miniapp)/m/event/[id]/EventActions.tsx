@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Bell, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getTgUser } from "@/lib/telegram/client";
@@ -384,9 +384,9 @@ function RsvpBar({
       <Sheet open={needsName} onOpenChange={setNeedsName}>
         <SheetContent side="bottom" className="space-y-3 px-5 pb-8 pt-6">
           <SheetTitle>Як до тебе звертатися?</SheetTitle>
-          <p className="text-muted-foreground text-sm">
+          <SheetDescription className="text-muted-foreground text-sm">
             Тільки ім'я. Інші ветерани побачать це тільки якщо ти увімкнеш «показувати моє ім'я».
-          </p>
+          </SheetDescription>
           <div className="space-y-2">
             <Label htmlFor="dn">Ім'я</Label>
             <Input id="dn" value={name} onChange={(e) => setName(e.target.value)} autoFocus />

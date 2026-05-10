@@ -15,7 +15,12 @@
 
 import { useEffect, useState } from "react";
 import { describeError, getCheckInToken, logApiError } from "@/lib/api";
-import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 
 const QR_BASE = "https://api.qrserver.com/v1/create-qr-code/";
@@ -77,7 +82,9 @@ export function QrSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="space-y-4 px-5 pb-8 pt-6">
         <SheetTitle className="text-center">Покажи QR організатору</SheetTitle>
-        <p className="text-muted-foreground text-center text-sm">{eventTitle}</p>
+        <SheetDescription className="text-muted-foreground text-center text-sm">
+          {eventTitle}
+        </SheetDescription>
         <p className="text-muted-foreground text-center text-xs">{startedAlreadyLine}</p>
 
         <div className="bg-card border-border mx-auto flex aspect-square w-full max-w-[280px] items-center justify-center rounded-2xl border p-3">

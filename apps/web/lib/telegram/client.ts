@@ -108,6 +108,23 @@ export function tgOpenLocationSettings(): void {
  * camera popup with `prompt` shown above the viewfinder; resolves
  * with the scanned text on success or `null` if scanning isn't
  * supported / the user cancelled.
+ *
+ * Two signal paths run in parallel because individual TG clients
+ * have shipped each one buggy at different times — we de-dupe in
+ * the helper so whichever fires first wins:
+ *
+ *   1. **`qrTextReceived` event** (preferred). Fires reliably on
+ *      iOS/desktop. We also explicitly close the popup, since the
+ *      event alone doesn't dismiss it on some clients.
+ *   2. **callback passed to `showScanQrPopup`**. Fallback for
+ *      clients that don't dispatch the event. Returning `true`
+ *      from the callback closes the popup (per TG docs — the
+ *      previous version returned `false`, which kept the popup
+ *      open and made it look like nothing was happening even
+ *      when the scan succeeded).
+ *
+ * Cancellation (`scanQrPopupClosed`) resolves the promise with
+ * null so the caller can clean up state.
  */
 export function tgScanQr(prompt?: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -120,21 +137,36 @@ export function tgScanQr(prompt?: string): Promise<string | null> {
       resolve(null);
       return;
     }
+
     let settled = false;
-    const finish = (data: string | null) => {
+
+    function onQrText(payload: unknown) {
+      const data = (payload as { data?: string } | undefined)?.data;
+      finish(typeof data === "string" ? data : null);
+      wa?.closeScanQrPopup?.();
+    }
+
+    function onClosed() {
+      finish(null);
+    }
+
+    function finish(value: string | null) {
       if (settled) return;
       settled = true;
-      resolve(data);
-    };
+      wa?.offEvent?.("qrTextReceived", onQrText);
+      wa?.offEvent?.("scanQrPopupClosed", onClosed);
+      resolve(value);
+    }
+
+    wa.onEvent?.("qrTextReceived", onQrText);
+    wa.onEvent?.("scanQrPopupClosed", onClosed);
+
     wa.showScanQrPopup({ text: prompt ?? "" }, (data) => {
-      finish(data);
-      // Returning false closes the popup; we don't want it to keep
-      // scanning past one successful read.
-      return false;
+      // Belt + suspenders: the event listener above usually wins,
+      // but on clients that only fire the callback we still want
+      // to capture the data. Returning `true` closes the popup.
+      finish(typeof data === "string" ? data : null);
+      return true;
     });
-    // No cancel callback in the API — cancellation closes the popup
-    // without firing the callback. We accept that it's a "wait until
-    // either scan or user navigates away" promise. UI shows a Cancel
-    // button via Telegram itself.
   });
 }

@@ -54,6 +54,14 @@ export type TelegramWebApp = {
     callback?: (data: string) => boolean | void,
   ) => void;
   closeScanQrPopup?: () => void;
+  /**
+   * The TG WebApp `onEvent`/`offEvent` API is overloaded across many
+   * event names (`fullscreenChanged`, `qrTextReceived`,
+   * `scanQrPopupClosed`, `themeChanged`, …). We type it loosely and
+   * cast inside individual handlers.
+   */
+  onEvent?: (event: string, cb: (data?: unknown) => void) => void;
+  offEvent?: (event: string, cb: (data?: unknown) => void) => void;
   // LocationManager — Bot API 8.0+. Use this in preference to
   // navigator.geolocation inside the Mini App: browser geolocation often
   // returns "denied" because Telegram doesn't proxy the OS permission
