@@ -33,15 +33,23 @@ export function buildEventShareUrl(eventId: string): string {
 
 /**
  * Deep link that prompts the user to add the bot to a Telegram group.
- * Telegram passes `evt_<eventId>` as the bot's start payload when it
- * joins, so the bot can call `POST /internal/event-rooms/attach` with
- * the right event_id + the chat_id of the group it was added to.
+ * Telegram passes `event_<eventId>` as the bot's start payload when
+ * it joins, so the bot can call
+ * `POST /internal/event-rooms/attach` with the right event_id + the
+ * chat_id of the group it was added to.
  *
- * Returns null when `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` is unset —
- * the calling UI should hide the affordance entirely in that case
- * (there's no useful fallback for adding-bot-to-group outside TG).
+ * Note: the prefix here is `event_`, not `evt_` — the bot
+ * (`supabase/functions/bot/index.ts`'s start handler) matches on
+ * `param.startsWith("event_")`. The Mini App's `/` route reads
+ * `start_param.startsWith("evt_")` instead — these are two
+ * independent prefixes for two different recipients (bot vs.
+ * Mini App), and getting them swapped silently does nothing
+ * because the receiver just falls through.
+ *
+ * Returns null when `NEXT_PUBLIC_TG_BOT_USERNAME` is unset — UI
+ * hides the affordance.
  */
 export function buildCreateChatUrl(eventId: string): string | null {
   if (!BOT) return null;
-  return `https://t.me/${BOT}?startgroup=evt_${eventId}`;
+  return `https://t.me/${BOT}?startgroup=event_${eventId}`;
 }
