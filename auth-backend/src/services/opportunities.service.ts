@@ -2,10 +2,40 @@ import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import { encodeCursor, decodeCursor, clampLimit } from '../utils/cursor.js';
 import type { Database } from '../types/supabase.generated.js';
+import { classifyAndPersist } from './gemini.service.js';
 
 export type OpportunityRow = Database['public']['Tables']['opportunities']['Row'];
 export type OpportunityInsert = Database['public']['Tables']['opportunities']['Insert'];
 export type OpportunityUpdate = Database['public']['Tables']['opportunities']['Update'];
+
+// Fields that affect classification. UPDATEs that don't touch any of these
+// (e.g., changing only the price or the photo URL) skip the classifier so we
+// don't burn Gemini budget on noise.
+const CLASSIFY_TRIGGERING_FIELDS = [
+  'title',
+  'short_description',
+  'description',
+  'interests',
+] as const;
+
+function shouldReclassify(patch: OpportunityUpdate): boolean {
+  return CLASSIFY_TRIGGERING_FIELDS.some((f) => Object.prototype.hasOwnProperty.call(patch, f));
+}
+
+// Fire-and-forget classifier hook. Uses void + .catch so a hung Gemini call
+// never blocks the API response. The row is functional with classified_interest='{}'
+// immediately; the column is filled in async within ~1–3s.
+function fireClassify(row: OpportunityRow): void {
+  void classifyAndPersist('opportunities', row.id, 'opportunity', {
+    title: row.title,
+    short_description: row.short_description,
+    description: row.description,
+    interests: row.interests,
+  }).catch((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn('classify hook (opportunities) failed:', err);
+  });
+}
 
 export async function create(input: OpportunityInsert): Promise<OpportunityRow> {
   // ends_at is a generated column — never write it. The validation layer accepts
@@ -18,6 +48,7 @@ export async function create(input: OpportunityInsert): Promise<OpportunityRow> 
     .single();
 
   if (error || !data) throw AppError.upstream('Failed to create opportunity', error?.message);
+  fireClassify(data);
   return data;
 }
 
@@ -31,6 +62,7 @@ export async function update(id: string, patch: OpportunityUpdate): Promise<Oppo
 
   if (error) throw AppError.upstream('Failed to update opportunity', error.message);
   if (!data) throw AppError.notFound('Opportunity not found');
+  if (shouldReclassify(patch)) fireClassify(data);
   return data;
 }
 

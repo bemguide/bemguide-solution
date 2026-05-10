@@ -1,6 +1,7 @@
 import { supabaseAdmin } from '../config/supabase.js';
 import { AppError } from '../utils/errors.js';
 import type { Database } from '../types/supabase.generated.js';
+import { classifyAndPersist } from './gemini.service.js';
 
 export type UserRow = Database['public']['Tables']['users']['Row'];
 export type UserInsert = Database['public']['Tables']['users']['Insert'];
@@ -109,6 +110,7 @@ export async function insertOnTelegramAuth(
     });
     throw AppError.upstream('Failed to create user from Telegram', error?.message);
   }
+  fireUserClassify(data);
   return data;
 }
 
@@ -141,6 +143,31 @@ export async function maybeSetDisplayName(
 // won't accept our HS256 session JWTs (project signs with ES256, private key
 // in Supabase KMS). Update of score-relevant columns still triggers
 // users_match_recompute — triggers fire regardless of role.
+// Fields that affect classification. UPDATEs that don't touch any of these
+// (e.g., changing only schedule_constraints or accessibility_flags) skip the
+// classifier so we don't burn Gemini budget.
+const USER_CLASSIFY_TRIGGERING_FIELDS = ['display_name', 'bio', 'interests'] as const;
+
+function shouldReclassifyUser(patch: OnboardingPatch): boolean {
+  return USER_CLASSIFY_TRIGGERING_FIELDS.some((f) =>
+    Object.prototype.hasOwnProperty.call(patch, f),
+  );
+}
+
+// Fire-and-forget classifier hook. Never blocks the API response. Row is
+// functional with classified_interest='{}' immediately; column is populated
+// async within ~1–3s.
+function fireUserClassify(row: UserRow): void {
+  void classifyAndPersist('users', row.id, 'user', {
+    display_name: row.display_name,
+    bio: row.bio,
+    interests: row.interests,
+  }).catch((err: unknown) => {
+    // eslint-disable-next-line no-console
+    console.warn('classify hook (users) failed:', err);
+  });
+}
+
 export async function upsertOnboarding(id: string, patch: OnboardingPatch): Promise<UserRow> {
   const { data, error, status } = await supabaseAdmin
     .from('users')
@@ -161,6 +188,7 @@ export async function upsertOnboarding(id: string, patch: OnboardingPatch): Prom
     // a flow where /auth/register seeds the row, so surface as 404.
     throw AppError.notFound('User profile not found');
   }
+  if (shouldReclassifyUser(patch)) fireUserClassify(data);
   return data;
 }
 

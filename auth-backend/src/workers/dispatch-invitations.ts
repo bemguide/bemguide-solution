@@ -38,29 +38,51 @@ interface DispatchSummary {
 }
 
 async function selectionPhase(): Promise<{ events: number; inserted: number }> {
-  // Find opportunities that are upcoming OR always-on (start_at is null) and
-  // have at least one row in event_matches that we haven't already invited.
-  // We do this in two queries to keep the SQL simple — the candidate set is
-  // small (active opportunities × top_N).
+  // Find opportunities that are upcoming OR always-on (start_at is null).
+  //
+  // Notification gate (separate from feed scoring): only invite users whose
+  // CLASSIFIED interests intersect the opportunity's classified interests by
+  // at least one tag. The feed personalises by score (which sums city +
+  // interest overlap + age + identity + accessibility + veteran status); a
+  // pure score threshold can't enforce "≥1 interest match" because non-
+  // interest factors can lift the score on their own. So we filter on the
+  // arrays directly.
+  //
+  // Pull all matches (with the user's classified_interest embedded) and
+  // filter in JS, then slice top-N. Pulling pre-filter would lose high-
+  // overlap users that sit just below the score cutoff.
   const nowIso = new Date().toISOString().replace(/Z$|[+-]\d{2}:?\d{2}$/, '');
 
   const { data: events, error: eventsErr } = await supabaseAdmin
     .from('opportunities')
-    .select('id, start_at')
+    .select('id, start_at, classified_interest')
     .or(`start_at.is.null,start_at.gte.${nowIso}`);
   if (eventsErr) throw new Error(`opportunities query failed: ${eventsErr.message}`);
 
   let inserted = 0;
   for (const ev of events ?? []) {
-    const { data: top, error: matchErr } = await supabaseAdmin
+    const oppInterests = new Set<string>(ev.classified_interest ?? []);
+    // No classified interests on the opportunity → no overlap is possible.
+    // This usually means the classifier hasn't run on it yet (classified_at
+    // IS NULL); the catch-up worker will retag it and the next dispatcher
+    // run will pick it up.
+    if (oppInterests.size === 0) continue;
+
+    const { data: candidates, error: matchErr } = await supabaseAdmin
       .from('event_matches')
-      .select('user_id, score')
+      .select('user_id, score, users:user_id(classified_interest)')
       .eq('event_id', ev.id)
       .order('score', { ascending: false })
-      .order('user_id', { ascending: true })
-      .limit(env.INVITATIONS_TOP_N);
+      .order('user_id', { ascending: true });
     if (matchErr) throw new Error(`event_matches query failed for ${ev.id}: ${matchErr.message}`);
-    if (!top || top.length === 0) continue;
+    if (!candidates || candidates.length === 0) continue;
+
+    const filtered = candidates.filter((m) => {
+      const userInterests = (m.users?.classified_interest ?? []) as string[];
+      return userInterests.some((i) => oppInterests.has(i));
+    });
+    const top = filtered.slice(0, env.INVITATIONS_TOP_N);
+    if (top.length === 0) continue;
 
     const rows = top.map((m) => ({
       event_id: ev.id,
