@@ -145,7 +145,7 @@ function ChatBlock({
       ) : createChatUrl ? (
         <Button asChild variant="outline" size="lg" className="h-12 w-full">
           <a href={createChatUrl} target="_blank" rel="noopener noreferrer">
-            Створити / прив'язати чат
+            Прив'язати групу
           </a>
         </Button>
       ) : (
@@ -155,10 +155,20 @@ function ChatBlock({
       )}
 
       {!chatInviteUrl ? (
-        <p className="text-muted-foreground text-xs leading-snug">
-          Telegram запропонує обрати групу. Бот приєднається і привʼяже її до
-          цієї події. Якщо група вже існує — обери її, бот сам розбереться.
-        </p>
+        <div className="text-muted-foreground space-y-1 text-xs leading-snug">
+          <p>
+            <strong className="text-foreground font-semibold">
+              Тільки група, не канал.
+            </strong>{" "}
+            Telegram передасть боту, до якої події прив'язатися, тільки коли ти
+            тиснеш кнопку вище — додавання бота вручну через адмінку каналу
+            нічого не дасть, бо бот не знатиме, де саме він опинився.
+          </p>
+          <p>
+            Якщо група вже існує — обери її в списку, бот переприєднається з
+            правильним посиланням.
+          </p>
+        </div>
       ) : null}
     </div>
   );
