@@ -26,6 +26,7 @@ import {
 } from "@/lib/api";
 import { useTelegramBackButton } from "@/lib/telegram/back-button";
 import { EventActions } from "./EventActions";
+import { OrganizerCheckIn } from "./OrganizerCheckIn";
 
 type Attending =
   /** GET /opportunities/:id/room hasn't resolved yet. */
@@ -205,11 +206,20 @@ export function ClientEventPage({ id }: { id: string }) {
       ) : null}
 
       {event.organizer_contact ? (
-        <section className="space-y-2 px-4 pb-8 pt-2">
+        <section className="space-y-2 px-4 pb-4 pt-2">
           <h2 className="text-foreground text-lg font-semibold">Організатор</h2>
           <OrganizerLine raw={event.organizer_contact} />
         </section>
       ) : null}
+
+      {/* Organizer-only — heuristic: their TG @username matches the
+          organizer_contact field. Backend doesn't yet store creator
+          on the row, so this is the closest "is this user running
+          the event?" signal we have client-side. */}
+      <OrganizerCheckIn
+        eventId={event.id}
+        organizerContact={event.organizer_contact}
+      />
 
       <EventActions
         eventId={event.id}

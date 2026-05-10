@@ -19,14 +19,50 @@
 "use client";
 
 import { apiFetch } from "./client";
+import type { V2EventAttendee, V2User } from "./types";
 
 export type CheckInToken = {
   token: string;
   expires_at?: string;
 };
 
-const PATH = (eventId: string) => `/opportunities/${eventId}/check-in-token`;
+const TOKEN = (eventId: string) => `/opportunities/${eventId}/check-in-token`;
+const VERIFY = (eventId: string) => `/opportunities/${eventId}/check-in`;
 
 export function getCheckInToken(eventId: string): Promise<CheckInToken> {
-  return apiFetch<CheckInToken>(PATH(eventId));
+  return apiFetch<CheckInToken>(TOKEN(eventId));
+}
+
+// ---------------------------------------------------------------
+// Verify (organizer side) — proposed backend contract
+// ---------------------------------------------------------------
+//
+// `POST /opportunities/:id/check-in`
+// Auth: Bearer required, must be admin OR the event creator
+//       (depends on the eventual ownership model — for now, admin only
+//        per existing PATCH/DELETE policy).
+// Body: { token: string }
+// 200: { ok: true, attendee, user? } — `user` optional, lets us
+//      render the attendee's display name in the result toast.
+// 401: { error: "unauthorized" }       — bad/expired token
+// 403: { error: "forbidden" }          — not admin / not organizer
+// 404: { error: "not_found" }          — endpoint not implemented yet
+//
+// Frontend guards 404 → shows "Бекенд поки що не приймає check-in",
+// so the scanner UI ships before the backend route lands.
+
+export type CheckInVerifyResult = {
+  ok: true;
+  attendee: V2EventAttendee;
+  user?: Pick<V2User, "id" | "display_name" | "show_name_publicly">;
+};
+
+export function verifyCheckIn(
+  eventId: string,
+  token: string,
+): Promise<CheckInVerifyResult> {
+  return apiFetch<CheckInVerifyResult>(VERIFY(eventId), {
+    method: "POST",
+    body: { token },
+  });
 }

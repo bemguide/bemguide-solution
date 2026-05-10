@@ -211,7 +211,11 @@ function AttendingBar({
                 Чат події
               </a>
             </Button>
-          ) : null}
+          ) : (
+            <p className="text-muted-foreground px-1 text-center text-xs leading-snug">
+              Чат з'явиться, коли організатор створить групу та додасть нашого бота.
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-2">
             <Button

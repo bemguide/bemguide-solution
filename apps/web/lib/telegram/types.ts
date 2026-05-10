@@ -43,6 +43,17 @@ export type TelegramWebApp = {
     offClick?: (cb: () => void) => void;
     isVisible?: boolean;
   };
+  /**
+   * Telegram's native QR scanner. Bot API 6.4+. Callback receives the
+   * scanned text; return `true` to keep the popup open, `false`/void
+   * to close it. Older clients won't expose this method — call sites
+   * must guard.
+   */
+  showScanQrPopup?: (
+    params: { text?: string },
+    callback?: (data: string) => boolean | void,
+  ) => void;
+  closeScanQrPopup?: () => void;
   // LocationManager — Bot API 8.0+. Use this in preference to
   // navigator.geolocation inside the Mini App: browser geolocation often
   // returns "denied" because Telegram doesn't proxy the OS permission

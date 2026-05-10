@@ -102,3 +102,39 @@ export function tgLocationDenied(): boolean {
 export function tgOpenLocationSettings(): void {
   tg()?.LocationManager?.openSettings();
 }
+
+/**
+ * Telegram's native QR scanner (Bot API 6.4+). Opens a fullscreen
+ * camera popup with `prompt` shown above the viewfinder; resolves
+ * with the scanned text on success or `null` if scanning isn't
+ * supported / the user cancelled.
+ */
+export function tgScanQr(prompt?: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const wa = tg();
+    if (!wa?.showScanQrPopup) {
+      resolve(null);
+      return;
+    }
+    if (wa.isVersionAtLeast && !wa.isVersionAtLeast("6.4")) {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    const finish = (data: string | null) => {
+      if (settled) return;
+      settled = true;
+      resolve(data);
+    };
+    wa.showScanQrPopup({ text: prompt ?? "" }, (data) => {
+      finish(data);
+      // Returning false closes the popup; we don't want it to keep
+      // scanning past one successful read.
+      return false;
+    });
+    // No cancel callback in the API — cancellation closes the popup
+    // without firing the callback. We accept that it's a "wait until
+    // either scan or user navigates away" promise. UI shows a Cancel
+    // button via Telegram itself.
+  });
+}
