@@ -13,6 +13,8 @@ import type { Database } from '../types/supabase.generated.js';
 
 type OpportunityRow = Database['public']['Tables']['opportunities']['Row'];
 type OpportunityHealthRow = Database['public']['Tables']['opportunity_health']['Row'];
+type OpportunityProgramRow = Database['public']['Tables']['opportunity_program']['Row'];
+type ProgramHotlineRow = Database['public']['Tables']['program_hotline']['Row'];
 
 export interface OpportunityCard extends OpportunityRow {
   match_score?: number;
@@ -27,21 +29,40 @@ export interface OpportunityHealthCard extends OpportunityHealthRow {
   distance_km?: number | null;
 }
 
+// State-program cards are static link-driven entries — no schedule, no
+// attendee decoration, no AI reasons. `match_score` is declared optional
+// only so the program variant joins the FeedItem union cleanly with the
+// other two card types; runtime never sets it (programs return before
+// the merge sort). If we ever score programs, this is the field to fill.
+export interface OpportunityProgramCard extends OpportunityProgramRow {
+  match_score?: number;
+}
+
 export interface FeedResponse {
   today_tomorrow: OpportunityCard[];
   this_week: OpportunityCard[];
   try_new: OpportunityCard[];
 }
 
-export type FeedFilter = 'health' | 'rehabilitation' | 'discounts';
+export type FeedFilter = 'health' | 'rehabilitation' | 'discounts' | 'programs';
+
+// `'programs'` is the only filter sourced from a third sibling table
+// (`opportunity_program`). The other three are classifier-tag-based and
+// share the same opportunities + opportunity_health code path.
+type TagBasedFilter = Exclude<FeedFilter, 'programs'>;
 
 export type FeedItem =
   | ({ source: 'opportunity' } & OpportunityCard)
-  | ({ source: 'opportunity_health' } & OpportunityHealthCard);
+  | ({ source: 'opportunity_health' } & OpportunityHealthCard)
+  | ({ source: 'opportunity_program' } & OpportunityProgramCard);
 
 export interface FilteredFeedResponse {
   filter: FeedFilter;
   items: FeedItem[];
+  // Populated only when `filter === 'programs'` — the "📞 Гарячі лінії"
+  // footer block from the doc, returned alongside the program cards so
+  // the frontend can render it without a second roundtrip.
+  hotlines?: ProgramHotlineRow[];
 }
 
 const TODAY_TOMORROW_HOURS = 36;
@@ -277,7 +298,7 @@ function toWallClockUtc(d: Date): string {
 const FILTERED_LIMIT = 30;
 const FILTERED_PER_TABLE_OVERFETCH = 60;
 
-const FILTER_TAG_SETS: Record<FeedFilter, readonly ClassifiedInterest[]> = {
+const FILTER_TAG_SETS: Record<TagBasedFilter, readonly ClassifiedInterest[]> = {
   health: HEALTH_INTEREST_TAGS,
   rehabilitation: REHABILITATION_INTEREST_TAGS,
   discounts: DISCOUNT_INTEREST_TAGS,
@@ -290,7 +311,7 @@ const FILTER_TAG_SETS: Record<FeedFilter, readonly ClassifiedInterest[]> = {
 // even if it also carries medical_care / psychological_support /
 // equine_therapy. Without this, e.g. "Центр реабілітації «Мальва»"
 // (`{rehabilitation, medical_care}`) would surface under both filters.
-const FILTER_EXCLUDE_TAGS: Partial<Record<FeedFilter, readonly ClassifiedInterest[]>> = {
+const FILTER_EXCLUDE_TAGS: Partial<Record<TagBasedFilter, readonly ClassifiedInterest[]>> = {
   health: REHABILITATION_INTEREST_TAGS,
 };
 
@@ -299,6 +320,11 @@ export async function buildFilteredFeed(
   filter: FeedFilter,
   cityFilter?: string,
 ): Promise<FilteredFeedResponse> {
+  // 'programs' is sourced from a different table (opportunity_program) with
+  // its own eligibility/city semantics — split out so the rest of this
+  // function can stay focused on the classifier-tag flow.
+  if (filter === 'programs') return buildProgramsFeed(userId, cityFilter);
+
   const user = await getById(userId);
   if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
 
@@ -380,6 +406,78 @@ export async function buildFilteredFeed(
   const merged: FeedItem[] = [...oppItems, ...healthItems];
   merged.sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0));
   return { filter, items: merged.slice(0, FILTERED_LIMIT) };
+}
+
+// ---------------------------------------------------------------------------
+// Programs feed: GET /feed?filter=programs
+// ---------------------------------------------------------------------------
+//
+// Sources state-veteran programs (`opportunity_program`) plus the hotline
+// footer (`program_hotline`). Diverges from the tag-based filter:
+//   • Eligibility is driven by user.veteran_status, NOT classified_interest.
+//     We filter target_veteran_status[] in JS (small table, low tens of
+//     rows). If no row targets the user's status — possible when the seed
+//     catalog lags the enum, e.g. 'volunteer' today — we fall back to
+//     returning every program in the city scope so the user still sees
+//     state-wide entries + hotlines instead of an empty page. Null status
+//     (still onboarding) browses everything by the same rule.
+//   • City scope is permissive: state-wide rows (city IS NULL) always
+//     surface alongside city-matched rows. The other filters use exact
+//     match because every event/health entry has a real location.
+//   • No match_score, no AI reasons, no decoration. Programs are static
+//     link cards — the row itself is the card.
+//   • Hotlines are returned as a sibling array (top-level field) so the UI
+//     can render them as a footer block independent of the cards.
+
+async function buildProgramsFeed(
+  userId: string,
+  cityFilter?: string,
+): Promise<FilteredFeedResponse> {
+  const user = await getById(userId);
+  if (!user) throw AppError.notFound('User profile not found', 'user_not_found');
+  const effectiveCity = cityFilter ?? user.city ?? null;
+
+  let progQuery = supabaseAdmin
+    .from('opportunity_program')
+    .select('*')
+    .order('program_category', { ascending: true })
+    .order('title', { ascending: true });
+
+  // City scope (only narrows when the user has a city). State-wide programs
+  // (city IS NULL) always pass.
+  if (effectiveCity) {
+    progQuery = progQuery.or(`city.is.null,city.eq.${effectiveCity}`);
+  }
+
+  const [progResp, hotlineResp] = await Promise.all([
+    progQuery,
+    supabaseAdmin.from('program_hotline').select('*').order('display_order', { ascending: true }),
+  ]);
+
+  if (progResp.error)
+    throw AppError.upstream('Failed to load programs feed', progResp.error.message);
+  if (hotlineResp.error)
+    throw AppError.upstream('Failed to load program hotlines', hotlineResp.error.message);
+
+  // Eligibility scope, filtered in JS so we can transparently fall back when
+  // the seed catalog doesn't target the user's status. See block comment above.
+  const inScope = (progResp.data ?? []) as OpportunityProgramRow[];
+  const status = user.veteran_status;
+  const matched = status
+    ? inScope.filter((p) => p.target_veteran_status.includes(status))
+    : inScope;
+  const scoped = matched.length > 0 ? matched : inScope;
+
+  const items: FeedItem[] = scoped.map((p) => ({
+    source: 'opportunity_program' as const,
+    ...p,
+  }));
+
+  return {
+    filter: 'programs',
+    items,
+    hotlines: hotlineResp.data ?? [],
+  };
 }
 
 function countOverlap(

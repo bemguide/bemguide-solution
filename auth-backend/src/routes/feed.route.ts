@@ -15,9 +15,12 @@ import { buildFeed, buildFilteredFeed } from '../services/feed.service.js';
 //                      (split out from 'health' so it surfaces as its
 //                      own user-facing category)
 //   'discounts'      → flat list across both tables, scoped to discount_promotions
+//   'programs'       → flat list of state-veteran programs from
+//                      opportunity_program, scoped by user.veteran_status,
+//                      plus a `hotlines` array for the footer block
 const querySchema = z.object({
   city: z.string().min(1).max(120).optional(),
-  filter: z.enum(['health', 'rehabilitation', 'discounts']).optional(),
+  filter: z.enum(['health', 'rehabilitation', 'discounts', 'programs']).optional(),
 });
 
 export async function feedRoute(app: FastifyInstance): Promise<void> {
