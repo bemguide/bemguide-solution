@@ -507,7 +507,12 @@ export type Database = {
           accessibility_flags: Database['public']['Enums']['accessibility_flag'][];
           address: string | null;
           city: string;
+          classified_at: string | null;
+          classified_interest: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence: number | null;
+          classifier_version: string | null;
           created_at: string;
+          created_by: string | null;
           description: string | null;
           duration_min: number | null;
           ends_at: string | null;
@@ -531,7 +536,12 @@ export type Database = {
           accessibility_flags?: Database['public']['Enums']['accessibility_flag'][];
           address?: string | null;
           city: string;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
           created_at?: string;
+          created_by?: string | null;
           description?: string | null;
           duration_min?: number | null;
           ends_at?: string | null;
@@ -555,7 +565,12 @@ export type Database = {
           accessibility_flags?: Database['public']['Enums']['accessibility_flag'][];
           address?: string | null;
           city?: string;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
           created_at?: string;
+          created_by?: string | null;
           description?: string | null;
           duration_min?: number | null;
           ends_at?: string | null;
@@ -574,6 +589,98 @@ export type Database = {
           target_veteran_status?: Database['public']['Enums']['veteran_status'][];
           title?: string;
           updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'opportunities_created_by_fkey';
+            columns: ['created_by'];
+            isOneToOne: false;
+            referencedRelation: 'users';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
+      opportunity_health: {
+        Row: {
+          accessibility_flags: Database['public']['Enums']['accessibility_flag'][];
+          address: string | null;
+          city: string;
+          classified_at: string | null;
+          classified_interest: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence: number | null;
+          classifier_version: string | null;
+          created_at: string;
+          description: string | null;
+          id: string;
+          interests: Database['public']['Enums']['health_interest'][];
+          location_lat: number;
+          location_lng: number;
+          oblast: string | null;
+          organizer_contact: string | null;
+          photo_url: string | null;
+          price_uah: number | null;
+          short_description: string | null;
+          target_age_range: Database['public']['Enums']['age_range'][];
+          target_identity_pref: Database['public']['Enums']['identity_pref'];
+          target_veteran_status: Database['public']['Enums']['veteran_status'][];
+          title: string;
+          type: Database['public']['Enums']['health_type'];
+          updated_at: string;
+          visit_count: number;
+        };
+        Insert: {
+          accessibility_flags?: Database['public']['Enums']['accessibility_flag'][];
+          address?: string | null;
+          city: string;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
+          created_at?: string;
+          description?: string | null;
+          id?: string;
+          interests?: Database['public']['Enums']['health_interest'][];
+          location_lat: number;
+          location_lng: number;
+          oblast?: string | null;
+          organizer_contact?: string | null;
+          photo_url?: string | null;
+          price_uah?: number | null;
+          short_description?: string | null;
+          target_age_range?: Database['public']['Enums']['age_range'][];
+          target_identity_pref?: Database['public']['Enums']['identity_pref'];
+          target_veteran_status?: Database['public']['Enums']['veteran_status'][];
+          title: string;
+          type?: Database['public']['Enums']['health_type'];
+          updated_at?: string;
+          visit_count?: number;
+        };
+        Update: {
+          accessibility_flags?: Database['public']['Enums']['accessibility_flag'][];
+          address?: string | null;
+          city?: string;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
+          created_at?: string;
+          description?: string | null;
+          id?: string;
+          interests?: Database['public']['Enums']['health_interest'][];
+          location_lat?: number;
+          location_lng?: number;
+          oblast?: string | null;
+          organizer_contact?: string | null;
+          photo_url?: string | null;
+          price_uah?: number | null;
+          short_description?: string | null;
+          target_age_range?: Database['public']['Enums']['age_range'][];
+          target_identity_pref?: Database['public']['Enums']['identity_pref'];
+          target_veteran_status?: Database['public']['Enums']['veteran_status'][];
+          title?: string;
+          type?: Database['public']['Enums']['health_type'];
+          updated_at?: string;
+          visit_count?: number;
         };
         Relationships: [];
       };
@@ -757,6 +864,10 @@ export type Database = {
           availability: string[];
           bio: string | null;
           city: string | null;
+          classified_at: string | null;
+          classified_interest: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence: number | null;
+          classifier_version: string | null;
           company_preference: Database['public']['Enums']['company_preference'];
           created_at: string;
           display_name: string | null;
@@ -777,6 +888,10 @@ export type Database = {
           availability?: string[];
           bio?: string | null;
           city?: string | null;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
           company_preference?: Database['public']['Enums']['company_preference'];
           created_at?: string;
           display_name?: string | null;
@@ -797,6 +912,10 @@ export type Database = {
           availability?: string[];
           bio?: string | null;
           city?: string | null;
+          classified_at?: string | null;
+          classified_interest?: Database['public']['Enums']['classified_interest'][];
+          classifier_confidence?: number | null;
+          classifier_version?: string | null;
           company_preference?: Database['public']['Enums']['company_preference'];
           created_at?: string;
           display_name?: string | null;
@@ -897,6 +1016,29 @@ export type Database = {
         | 'service_animal_ok';
       age_range: '18_24' | '25_34' | '35_44' | '45_54' | '55_64' | '65_plus';
       attendee_status: 'joining' | 'attended' | 'no_show' | 'left';
+      classified_interest:
+        | 'physical_sport'
+        | 'adaptive_sport'
+        | 'equine_therapy'
+        | 'outdoor_recreation'
+        | 'art_therapy'
+        | 'music'
+        | 'creative_workshop'
+        | 'cultural_event'
+        | 'rehabilitation'
+        | 'recovery'
+        | 'psychological_support'
+        | 'medical_care'
+        | 'legal_aid'
+        | 'education'
+        | 'career_development'
+        | 'employment'
+        | 'financial_aid'
+        | 'discount_promotions'
+        | 'support_group'
+        | 'community_meetup'
+        | 'family_support'
+        | 'women_support';
       company_preference: 'with_partner' | 'women_only' | 'mixed' | 'close_ones' | 'any';
       discovery_channel:
         | 'go_partner'
@@ -910,6 +1052,8 @@ export type Database = {
       document_type: 'passport' | 'id_card' | 'driver_license';
       event_source: 'organizer' | 'veteran_submission' | 'admin_seed';
       event_status: 'draft' | 'pending' | 'approved' | 'rejected' | 'archived';
+      health_interest: 'rehabilitation' | 'recovery' | 'healing';
+      health_type: 'static';
       identity_pref:
         | 'any'
         | 'women_only'
@@ -1093,6 +1237,30 @@ export const Constants = {
       ],
       age_range: ['18_24', '25_34', '35_44', '45_54', '55_64', '65_plus'],
       attendee_status: ['joining', 'attended', 'no_show', 'left'],
+      classified_interest: [
+        'physical_sport',
+        'adaptive_sport',
+        'equine_therapy',
+        'outdoor_recreation',
+        'art_therapy',
+        'music',
+        'creative_workshop',
+        'cultural_event',
+        'rehabilitation',
+        'recovery',
+        'psychological_support',
+        'medical_care',
+        'legal_aid',
+        'education',
+        'career_development',
+        'employment',
+        'financial_aid',
+        'discount_promotions',
+        'support_group',
+        'community_meetup',
+        'family_support',
+        'women_support',
+      ],
       company_preference: ['with_partner', 'women_only', 'mixed', 'close_ones', 'any'],
       discovery_channel: [
         'go_partner',
@@ -1107,6 +1275,8 @@ export const Constants = {
       document_type: ['passport', 'id_card', 'driver_license'],
       event_source: ['organizer', 'veteran_submission', 'admin_seed'],
       event_status: ['draft', 'pending', 'approved', 'rejected', 'archived'],
+      health_interest: ['rehabilitation', 'recovery', 'healing'],
+      health_type: ['static'],
       identity_pref: [
         'any',
         'women_only',

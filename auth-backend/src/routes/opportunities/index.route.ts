@@ -26,21 +26,26 @@ export async function opportunitiesIndexRoute(app: FastifyInstance): Promise<voi
   // Authed create — veteran-submitted events. Schema has no `status` column,
   // so this is "publish on submit" until moderation lands. The contract's
   // open question #7 acknowledges this gap.
+  // created_by is forced to req.user.id — body's value (if any) is ignored.
+  // Trigger opportunities_create_organizer_attendee inserts the matching
+  // event_attendees row in the same transaction.
   app.post('/opportunities', { preHandler: authGuard }, async (req, reply) => {
     if (!req.user) throw AppError.unauthenticated();
     const input = parseOrThrow(createOpportunitySchema, req.body, 'opportunity');
-    const opportunity = await create(input);
+    const opportunity = await create({ ...input, created_by: req.user.id });
     reply.code(201);
     return serializeOpportunityTimes(opportunity);
   });
 
   // Admin alias for create — kept for parity with /events/* historical surface.
-  // (Both write to the same table; the difference is whether we trust the
-  // requester to skip moderation. Until moderation exists, both paths behave
-  // identically.)
+  // Differs from the public route by accepting a `created_by` override so admins
+  // can create events on behalf of veterans (the veteran is then auto-added as
+  // attendee by the trigger). When omitted, defaults to the admin themselves.
   app.post('/admin/opportunities', { preHandler: adminGuard }, async (req, reply) => {
+    if (!req.user) throw AppError.unauthenticated();
     const input = parseOrThrow(createOpportunitySchema, req.body, 'opportunity');
-    const opportunity = await create(input);
+    const created_by = input.created_by ?? req.user.id;
+    const opportunity = await create({ ...input, created_by });
     reply.code(201);
     return serializeOpportunityTimes(opportunity);
   });

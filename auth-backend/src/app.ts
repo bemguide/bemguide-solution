@@ -29,6 +29,7 @@ import { opportunityAttendeesRoute } from './routes/opportunities/attendees.rout
 import { opportunityRsvpRoute } from './routes/opportunities/rsvp.route.js';
 import { opportunityRoomRoute } from './routes/opportunities/room.route.js';
 import { opportunityCheckInTokenRoute } from './routes/opportunities/check-in-token.route.js';
+import { opportunityCheckInRoute } from './routes/opportunities/check-in.route.js';
 
 // Personalised + match endpoints.
 import { feedRoute } from './routes/feed.route.js';
@@ -72,6 +73,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await app.register(opportunityRsvpRoute);
   await app.register(opportunityRoomRoute);
   await app.register(opportunityCheckInTokenRoute);
+  await app.register(opportunityCheckInRoute);
 
   // Feed + matches
   await app.register(feedRoute);

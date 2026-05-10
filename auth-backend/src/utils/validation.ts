@@ -97,6 +97,9 @@ export const createOpportunitySchema = z.object({
   target_age_range: z.array(ageRangeEnum).max(6).optional(),
   target_identity_pref: identityPrefEnum.optional(),
   target_veteran_status: z.array(veteranStatusEnum).max(12).optional(),
+  // Public route always overwrites with req.user.id; admin alias honours this
+  // override so admins can create events on behalf of veterans.
+  created_by: z.string().uuid().optional(),
 });
 export type CreateOpportunityInput = z.infer<typeof createOpportunitySchema>;
 
