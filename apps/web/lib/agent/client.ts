@@ -25,7 +25,12 @@ export class AgentApiError extends Error {
   }
 }
 
-const RAW_BASE_URL = (process.env.NEXT_PUBLIC_AGENT_BASE_URL ?? "").trim();
+// Strip trailing slashes so URL composition (`${base}/v1/...`) doesn't
+// produce a `//` segment when ops sets the env var with a trailing
+// slash. Most servers tolerate `//` but it's an avoidable foot-gun.
+const RAW_BASE_URL = (process.env.NEXT_PUBLIC_AGENT_BASE_URL ?? "")
+  .trim()
+  .replace(/\/+$/, "");
 
 /** `null` when the env var isn't configured — UI uses this to hide the tab. */
 export function getAgentBaseUrl(): string | null {
