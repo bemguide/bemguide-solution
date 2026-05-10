@@ -1,17 +1,18 @@
 // Mobile-app bottom tab bar for the (tabs) route group.
 //
-// Three equal-width tabs: feed / propose / me. Active tab gets the
-// primary teal; inactive tabs use muted-foreground so the eye lands
-// on where you are without straining. Sized to clear the iOS home
-// indicator inside fullscreen TMA via the (miniapp) layout's
-// `--tg-safe-area-inset-bottom` padding.
+// Tab order: feed / propose / assistant / me. The "Помічник" tab is
+// gated on `NEXT_PUBLIC_AGENT_BASE_URL` — when the agent backend
+// isn't configured (local-only dev, prod before the integration is
+// live, etc.) we fall back to the original three-tab grid so the
+// surface still works without surfacing a broken tab.
 
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Plus, Sparkles, User } from "lucide-react";
+import { MessageCircleQuestion, Plus, Sparkles, User } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getAgentBaseUrl } from "@/lib/agent";
 
 type Tab = {
   href: string;
@@ -19,21 +20,32 @@ type Tab = {
   icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
 };
 
-const TABS: Tab[] = [
-  { href: "/m/feed", label: "Стрічка", icon: Sparkles },
-  { href: "/m/propose", label: "Запропонувати", icon: Plus },
-  { href: "/m/me", label: "Я", icon: User },
-];
+const FEED_TAB: Tab = { href: "/m/feed", label: "Стрічка", icon: Sparkles };
+const PROPOSE_TAB: Tab = {
+  href: "/m/propose",
+  label: "Запропонувати",
+  icon: Plus,
+};
+const ASSISTANT_TAB: Tab = {
+  href: "/m/assistant",
+  label: "Помічник",
+  icon: MessageCircleQuestion,
+};
+const ME_TAB: Tab = { href: "/m/me", label: "Я", icon: User };
 
 export function BottomTabBar() {
   const pathname = usePathname() ?? "";
+  const tabs: Tab[] = getAgentBaseUrl()
+    ? [FEED_TAB, PROPOSE_TAB, ASSISTANT_TAB, ME_TAB]
+    : [FEED_TAB, PROPOSE_TAB, ME_TAB];
+  const cols = tabs.length === 4 ? "grid-cols-4" : "grid-cols-3";
   return (
     <nav
       className="bg-background border-border/60 shrink-0 border-t"
       aria-label="Основна навігація"
     >
-      <ul className="grid grid-cols-3">
-        {TABS.map((tab) => {
+      <ul className={cn("grid", cols)}>
+        {tabs.map((tab) => {
           const active =
             pathname === tab.href || pathname.startsWith(`${tab.href}/`);
           const Icon = tab.icon;
