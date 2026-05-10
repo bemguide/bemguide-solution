@@ -44,3 +44,7 @@ supabase/.branches/
 # IDE
 .idea/
 .vscode/
+
+# Claude Code per-workspace internals (session locks, transcripts, etc.).
+.claude/
+**/.claude/
