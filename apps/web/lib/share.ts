@@ -20,3 +20,18 @@ export function buildEventShareUrl(eventId: string): string {
   }
   return `/event/${eventId}`;
 }
+
+/**
+ * Deep link that prompts the user to add the bot to a Telegram group.
+ * Telegram passes `evt_<eventId>` as the bot's start payload when it
+ * joins, so the bot can call `POST /internal/event-rooms/attach` with
+ * the right event_id + the chat_id of the group it was added to.
+ *
+ * Returns null when `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` is unset —
+ * the calling UI should hide the affordance entirely in that case
+ * (there's no useful fallback for adding-bot-to-group outside TG).
+ */
+export function buildCreateChatUrl(eventId: string): string | null {
+  if (!BOT) return null;
+  return `https://t.me/${BOT}?startgroup=evt_${eventId}`;
+}

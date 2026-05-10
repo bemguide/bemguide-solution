@@ -215,10 +215,14 @@ export function ClientEventPage({ id }: { id: string }) {
       {/* Organizer-only — heuristic: their TG @username matches the
           organizer_contact field. Backend doesn't yet store creator
           on the row, so this is the closest "is this user running
-          the event?" signal we have client-side. */}
+          the event?" signal we have client-side. We pass the same
+          `room` data AttendingBar uses so the organizer can reach
+          the chat (Відкрити чат) without RSVPing into their own
+          event. */}
       <OrganizerCheckIn
         eventId={event.id}
         organizerContact={event.organizer_contact}
+        room={attending.kind === "yes" ? attending.room : null}
       />
 
       <EventActions

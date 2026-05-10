@@ -1,23 +1,29 @@
-// Organizer-side check-in section on /m/event/[id].
+// Organizer-side controls on /m/event/[id]. Two sub-sections:
 //
-// Visible only when the viewer's Telegram @username matches the
-// event's `organizer_contact` field — a heuristic until the backend
-// stores `created_by_user_id` on opportunities. Not perfect (the
-// field is free-text and could contain anyone's handle), but good
-// enough for the demo: only the matching user sees the scan UI.
+//   1. **Чат події** — tap "Створити / прив'язати чат" to open
+//      Telegram's add-to-group picker with `?startgroup=evt_<id>`.
+//      User picks the group they already created, the bot joins with
+//      `evt_<id>` as start payload, the bot calls
+//      `POST /internal/event-rooms/attach` with the right event_id +
+//      the chat_id it just joined.
 //
-// On tap:
-//   1. Telegram's `showScanQrPopup` opens (Bot API 6.4+).
-//   2. Scanned text is the token from the attendee's QR
-//      (`GET /opportunities/:id/check-in-token`).
-//   3. Frontend posts it to `POST /opportunities/:id/check-in` —
-//      the proposed verify endpoint (see lib/api/check-in.ts).
-//   4. UI shows pass/fail with the attendee name when the backend
-//      returns a user payload.
+//      Without this hand-off the bot has no way to know which event
+//      a freshly-joined chat is for, so nothing was happening when
+//      organizers manually added the bot — the start payload is the
+//      missing breadcrumb.
 //
-// Backend not yet shipped → 404 path renders a neutral
-// "scanner-готовий-але-бекенд-не" hint so the surface is visible
-// the moment the route lands without a frontend redeploy.
+//      The chat-already-exists case shows "Відкрити чат" pulling
+//      `room.chat_invite_url` (same source as AttendingBar) so the
+//      organizer doesn't need to RSVP into their own event just to
+//      reach the chat. `null` when chat isn't bound yet — Telegram
+//      will route the picker to wherever the user already added the
+//      bot so re-running the action is idempotent.
+//
+//   2. **Реєстрація учасників** — QR scanner unchanged.
+//
+// Whole section is gated on a heuristic (viewer's @username matches
+// `organizer_contact`). Replace with a backend-tracked
+// `created_by_user_id` check when that lands.
 
 "use client";
 
@@ -29,7 +35,9 @@ import {
   describeError,
   logApiError,
   verifyCheckIn,
+  type V2EventRoom,
 } from "@/lib/api";
+import { buildCreateChatUrl } from "@/lib/share";
 import { getTgUserWithWait, tgScanQr } from "@/lib/telegram/client";
 
 type Result =
@@ -42,13 +50,11 @@ type Result =
 
 const TG_HANDLE_RE = /^@?([a-zA-Z][a-zA-Z0-9_]{3,31})$/;
 
-/** Best-effort "is the contact a reference to me?" check. */
 function isOrganizerMatch(contact: string | null, tgUsername: string | null): boolean {
   if (!contact || !tgUsername) return false;
   const c = contact.toLowerCase().trim();
   const u = tgUsername.toLowerCase();
   if (TG_HANDLE_RE.test(c) && c.replace(/^@/, "") === u) return true;
-  // Embedded URL: "label · https://t.me/username"
   if (c.includes(`t.me/${u}`)) return true;
   return false;
 }
@@ -56,9 +62,13 @@ function isOrganizerMatch(contact: string | null, tgUsername: string | null): bo
 export function OrganizerCheckIn({
   eventId,
   organizerContact,
+  room,
 }: {
   eventId: string;
   organizerContact: string | null;
+  /** Same room data the AttendingBar uses. May be null when the
+   *  organizer hasn't RSVPed (and so /room 403'd). */
+  room: V2EventRoom | null;
 }) {
   const [tgUsername, setTgUsername] = useState<string | null>(null);
   const [result, setResult] = useState<Result>({ kind: "idle" });
@@ -76,6 +86,9 @@ export function OrganizerCheckIn({
 
   const visible = isOrganizerMatch(organizerContact, tgUsername);
   if (!visible) return null;
+
+  const createChatUrl = buildCreateChatUrl(eventId);
+  const chatInviteUrl = room?.chat_invite_url ?? null;
 
   async function onScan() {
     setResult({ kind: "scanning" });
@@ -100,15 +113,76 @@ export function OrganizerCheckIn({
   }
 
   return (
-    <section className="space-y-2 px-4 pb-4 pt-2">
-      <h2 className="text-foreground text-lg font-semibold">Реєстрація учасників</h2>
+    <section className="space-y-5 px-4 pb-4 pt-2">
+      <h2 className="text-foreground text-lg font-semibold">Управління подією</h2>
+
+      <ChatBlock createChatUrl={createChatUrl} chatInviteUrl={chatInviteUrl} />
+
+      <ScannerBlock result={result} onScan={() => void onScan()} />
+    </section>
+  );
+}
+
+function ChatBlock({
+  createChatUrl,
+  chatInviteUrl,
+}: {
+  createChatUrl: string | null;
+  chatInviteUrl: string | null;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
+        Чат події
+      </p>
+
+      {chatInviteUrl ? (
+        <Button asChild size="lg" className="h-12 w-full">
+          <a href={chatInviteUrl} target="_blank" rel="noopener noreferrer">
+            Відкрити чат
+          </a>
+        </Button>
+      ) : createChatUrl ? (
+        <Button asChild variant="outline" size="lg" className="h-12 w-full">
+          <a href={createChatUrl} target="_blank" rel="noopener noreferrer">
+            Створити / прив'язати чат
+          </a>
+        </Button>
+      ) : (
+        <Button type="button" size="lg" className="h-12 w-full" disabled>
+          Бот не налаштований
+        </Button>
+      )}
+
+      {!chatInviteUrl ? (
+        <p className="text-muted-foreground text-xs leading-snug">
+          Telegram запропонує обрати групу. Бот приєднається і привʼяже її до
+          цієї події. Якщо група вже існує — обери її, бот сам розбереться.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ScannerBlock({
+  result,
+  onScan,
+}: {
+  result: Result;
+  onScan: () => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <p className="text-muted-foreground text-xs font-semibold uppercase tracking-wider">
+        Реєстрація учасників
+      </p>
 
       <Button
         type="button"
         variant="outline"
         size="lg"
         className="h-12 w-full"
-        onClick={() => void onScan()}
+        onClick={onScan}
         disabled={result.kind === "scanning" || result.kind === "verifying"}
       >
         <ScanLine className="mr-2 h-5 w-5" aria-hidden />
@@ -120,7 +194,7 @@ export function OrganizerCheckIn({
       </Button>
 
       <ResultLine result={result} />
-    </section>
+    </div>
   );
 }
 
