@@ -1,23 +1,28 @@
-// 12 single-question substeps + 1 greeting over the v2 `users` schema.
+// 14–16 single-question substeps + 1 greeting over the v2 `users`
+// schema plus two locally-stored namespaces (AppPrefs, HealthPrefs).
 // Each screen asks exactly one thing — keeps tap targets big, the
 // progress strip honest, and avoids "wall of form" on the comfort and
 // about screens that previously stacked 3-4 fields.
 //
-//   step  field                  PATCH /me slice
+//   step  field                  PATCH /me slice / local
 //   ────  ─────────────────────  ────────────────────────────────
 //   0     greeting               (no PATCH)
 //   1     city                   { city }
-//   2     display_name+privacy    { display_name, show_name_publicly }
-//   3     interests              { interests }
-//   4     availability           { availability }
-//   5     schedule_constraints    { schedule_constraints }
-//   6     company_preference     { company_preference }
-//   7     accessibility_flags    { accessibility_flags }
-//   8     triggers_to_avoid      { triggers_to_avoid }
-//   9     veteran_status         { veteran_status }
-//   10    role_in_group          { role_in_group }
-//   11    age_range              { age_range }
-//   12    bio                    { bio }
+//   2     accessibility prefs    localStorage: AppPrefs (font / dark / palette)
+//   3     health needed?         localStorage: HealthPrefs.needed
+//   4     health category        localStorage: HealthPrefs.category    ◀── only if needed=yes
+//   5     health directions      localStorage: HealthPrefs.directions  ◀── only if needed=yes
+//   6     display_name+privacy   { display_name, show_name_publicly }
+//   7     interests              { interests }
+//   8     availability           { availability }
+//   9     schedule_constraints   { schedule_constraints }
+//   10    company_preference     { company_preference }
+//   11    accessibility_flags    { accessibility_flags }
+//   12    triggers_to_avoid      { triggers_to_avoid }
+//   13    veteran_status         { veteran_status }
+//   14    role_in_group          { role_in_group }
+//   15    age_range              { age_range }
+//   16    bio                    { bio }
 //
 // Pre-fill from Telegram (where TG exposes it):
 //   - display_name <- initDataUnsafe.user.first_name (waits for SDK)
@@ -25,12 +30,32 @@
 // Deep-link bypass:
 //   evt_<id>   → /m/event/<id>
 //   defer_<id> → /m/feed
+//
+// Progress bar maths:
+//   - When the user picks "no" on step 3 (health), steps 4 and 5 are
+//     skipped → total bars drop from 16 to 14 and bar indices for
+//     steps 6+ shrink by 2. `barIndex()` and `totalBars()` encode it.
+//
+// AppPrefs and HealthPrefs are V0 localStorage-only. The agent
+// backend / v2 backend haven't gained these fields yet — when they do,
+// swap `saveAppPrefs` / `saveHealthPrefs` for API calls.
 
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LocateFixed, MapPin, X } from "lucide-react";
+import {
+  Heart,
+  LocateFixed,
+  MapPin,
+  Mic,
+  Moon,
+  Palette,
+  Sun,
+  Type,
+  Volume2,
+  X,
+} from "lucide-react";
 import { DEMO_CITIES } from "@poruch/shared";
 import {
   OnboardingStep,
@@ -61,18 +86,36 @@ import {
   type VeteranStatus,
 } from "@/lib/api";
 import {
+  applyAppPrefs,
+  DEFAULT_APP_PREFS,
+  loadAppPrefs,
+  loadHealthPrefs,
+  saveAppPrefs,
+  saveHealthPrefs,
+  type AppPrefs,
+  type ColorblindPalette,
+  type FontSize,
+  type HealthCategory,
+  type HealthPrefs,
+} from "@/lib/app-prefs";
+import {
   ACCESSIBILITY_OPTIONS,
   AGE_RANGE_OPTIONS,
   AVAILABILITY_OPTIONS,
   COMPANY_PREFERENCE_OPTIONS,
+  FONT_SIZE_OPTIONS,
+  HEALTH_CATEGORY_OPTIONS,
+  HEALTH_DIRECTIONS,
   INTEREST_OPTIONS,
+  PALETTE_OPTIONS,
   ROLE_IN_GROUP_OPTIONS,
   TRIGGER_OPTIONS,
   VETERAN_STATUS_OPTIONS,
   type Option,
 } from "./options";
 
-const TOTAL_STEPS = 12;
+const TOTAL_STEPS_NO_HEALTH = 14;
+const TOTAL_STEPS_WITH_HEALTH = 16;
 
 /**
  * Demo restriction: backend seed data only covers Дніпро for now, so
@@ -82,6 +125,7 @@ const TOTAL_STEPS = 12;
  * one and end up on an empty feed.
  */
 const ENABLED_CITY = "Дніпро";
+
 type StepIndex =
   | 0
   | 1
@@ -95,7 +139,11 @@ type StepIndex =
   | 9
   | 10
   | 11
-  | 12;
+  | 12
+  | 13
+  | 14
+  | 15
+  | 16;
 
 const NEAREST_CITIES = [...DEMO_CITIES] as const;
 
@@ -124,6 +172,10 @@ function haversineKm(a: { lat: number; lng: number }, b: { lat: number; lng: num
 
 type FormState = {
   city: string;
+  appPrefs: AppPrefs;
+  healthNeeded: boolean | null;
+  healthCategory: HealthCategory | null;
+  healthDirections: string[];
   displayName: string;
   showNamePublicly: boolean;
   interests: string[];
@@ -142,6 +194,10 @@ const initialState: FormState = {
   // Pre-selected because every other chip is disabled — saves the
   // user a tap on Step 1.
   city: ENABLED_CITY,
+  appPrefs: DEFAULT_APP_PREFS,
+  healthNeeded: null,
+  healthCategory: null,
+  healthDirections: [],
   displayName: "",
   showNamePublicly: false,
   interests: [],
@@ -156,6 +212,22 @@ const initialState: FormState = {
   bio: "",
 };
 
+/**
+ * Map a global step (0..16) onto the bar index that should be filled
+ * by the time the user lands on that screen. Greeting renders -1 (no
+ * bars). When the user said "no" on step 3, steps 4–5 are skipped, so
+ * step 6 lands on bar 3 instead of bar 5.
+ */
+function barIndex(globalStep: number, healthYes: boolean): number {
+  if (globalStep === 0) return -1;
+  if (globalStep <= 5) return globalStep - 1;
+  return healthYes ? globalStep - 1 : globalStep - 3;
+}
+
+function totalBars(healthYes: boolean): number {
+  return healthYes ? TOTAL_STEPS_WITH_HEALTH : TOTAL_STEPS_NO_HEALTH;
+}
+
 export function OnboardingFlow() {
   const router = useRouter();
   const [step, setStep] = useState<StepIndex>(0);
@@ -167,7 +239,9 @@ export function OnboardingFlow() {
   const [locating, setLocating] = useState(false);
   const [locateError, setLocateError] = useState<string | null>(null);
 
-  // Bootstrap: deep-link bypass + Telegram pre-fill (waits for SDK).
+  // Bootstrap: deep-link bypass + Telegram pre-fill (waits for SDK)
+  // + restore any AppPrefs / HealthPrefs the user already has from a
+  // prior session (so the toggles on step 2/3 reflect reality).
   useEffect(() => {
     let cancelled = false;
     async function init() {
@@ -182,6 +256,19 @@ export function OnboardingFlow() {
         router.replace("/m/feed");
         return;
       }
+
+      const storedApp = loadAppPrefs();
+      const storedHealth = loadHealthPrefs();
+      if (!cancelled) {
+        setState((s) => ({
+          ...s,
+          appPrefs: storedApp,
+          healthNeeded: storedHealth.needed,
+          healthCategory: storedHealth.category,
+          healthDirections: storedHealth.directions,
+        }));
+      }
+
       const tg = await getTgUserWithWait();
       if (cancelled) return;
       // Compose a pre-filled display_name from whatever TG gave us.
@@ -227,6 +314,27 @@ export function OnboardingFlow() {
     void advance(skipPatch ? {} : patchFn(), next);
   }
 
+  // Live-preview helper for the Адаптація step. Mutates form state,
+  // applies the prefs to <html> immediately so the user sees the
+  // change, and persists to localStorage so it survives a reload —
+  // even if they hit "Назад" via Telegram BackButton without
+  // completing onboarding.
+  function setAppPrefs(next: AppPrefs) {
+    setState((s) => ({ ...s, appPrefs: next }));
+    applyAppPrefs(next);
+    saveAppPrefs(next);
+  }
+
+  function setHealthPrefs(next: HealthPrefs) {
+    setState((s) => ({
+      ...s,
+      healthNeeded: next.needed,
+      healthCategory: next.category,
+      healthDirections: next.directions,
+    }));
+    saveHealthPrefs(next);
+  }
+
   // ---------- Step 1: city geolocation ----------
 
   async function detectLocation() {
@@ -254,11 +362,15 @@ export function OnboardingFlow() {
 
   // ---------- Render ----------
 
+  const healthYes = state.healthNeeded === true;
+  const total = totalBars(healthYes);
+  const bar = (gs: number) => barIndex(gs, healthYes);
+
   if (step === 0) {
     return (
       <OnboardingStep
-        step={-1}
-        total={TOTAL_STEPS}
+        step={bar(0)}
+        total={total}
         primaryLabel="Подивитись поруч"
         busy={busy}
         onPrimary={() => void advance(null, 1)}
@@ -279,8 +391,8 @@ export function OnboardingFlow() {
   if (step === 1) {
     return (
       <OnboardingStep
-        step={0}
-        total={TOTAL_STEPS}
+        step={bar(1)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Не зараз, тільки гляну"
         busy={busy}
@@ -307,11 +419,144 @@ export function OnboardingFlow() {
   }
 
   if (step === 2) {
+    return (
+      <OnboardingStep
+        step={bar(2)}
+        total={total}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => void advance(null, 3)}
+        onSkip={() => void advance(null, 3)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Адаптація застосунку</StepHeading>
+          <StepSubheading>Налаштуй під себе — побачиш зміни одразу.</StepSubheading>
+        </div>
+        <AdaptationStep prefs={state.appPrefs} onChange={setAppPrefs} />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 3) {
+    return (
+      <OnboardingStep
+        step={bar(3)}
+        total={total}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        primaryDisabled={state.healthNeeded === null}
+        onPrimary={() => {
+          // "Yes" → branch into the health-detail subflow (steps 4-5).
+          // "No" → skip directly to step 6 (display_name).
+          const next: StepIndex = state.healthNeeded === true ? 4 : 6;
+          if (state.healthNeeded === false) {
+            // Clear any leftover detail answers from a previous "yes".
+            setHealthPrefs({ needed: false, category: null, directions: [] });
+          }
+          void advance(null, next);
+        }}
+        onSkip={() => void advance(null, 6)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Чи потрібна тобі допомога зі здоров'ям?</StepHeading>
+          <StepSubheading>
+            Якщо так — підкажемо релевантні заклади і програми. Завжди
+            можна змінити.
+          </StepSubheading>
+        </div>
+        <HealthTriggerStep
+          value={state.healthNeeded}
+          onChange={(needed) =>
+            setHealthPrefs({
+              needed,
+              category: needed ? state.healthCategory : null,
+              directions: needed ? state.healthDirections : [],
+            })
+          }
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 4) {
+    return (
+      <OnboardingStep
+        step={bar(4)}
+        total={total}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        primaryDisabled={state.healthCategory === null}
+        onPrimary={() => void advance(null, 5)}
+        onSkip={() => void advance(null, 6)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Обери</StepHeading>
+          <StepSubheading>Що для тебе зараз найважливіше?</StepSubheading>
+        </div>
+        <HealthCategoryStep
+          value={state.healthCategory}
+          onChange={(category) =>
+            setHealthPrefs({
+              needed: true,
+              category,
+              // Clearing directions when category changes — they're
+              // category-scoped slugs, mixing them across categories
+              // makes the persisted record incoherent.
+              directions: state.healthCategory === category
+                ? state.healthDirections
+                : [],
+            })
+          }
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 5) {
+    const directions =
+      state.healthCategory ? HEALTH_DIRECTIONS[state.healthCategory] : [];
+    return (
+      <OnboardingStep
+        step={bar(5)}
+        total={total}
+        primaryLabel="Далі"
+        skipLabel="Пропустити"
+        busy={busy}
+        onPrimary={() => void advance(null, 6)}
+        onSkip={() => void advance(null, 6)}
+      >
+        <div className="space-y-2">
+          <StepHeading>Обери напрямок</StepHeading>
+          <StepSubheading>Можна кілька — або жодного.</StepSubheading>
+        </div>
+        <HealthDirectionStep
+          options={directions}
+          value={state.healthDirections}
+          onChange={(directions) =>
+            setHealthPrefs({
+              needed: true,
+              category: state.healthCategory,
+              directions,
+            })
+          }
+        />
+        {error ? <ErrorLine>{error}</ErrorLine> : null}
+      </OnboardingStep>
+    );
+  }
+
+  if (step === 6) {
     const name = state.displayName.trim();
     return (
       <OnboardingStep
-        step={1}
-        total={TOTAL_STEPS}
+        step={bar(6)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -321,10 +566,10 @@ export function OnboardingFlow() {
               display_name: name || null,
               show_name_publicly: name ? state.showNamePublicly : false,
             },
-            3,
+            7,
           )
         }
-        onSkip={() => void advance({}, 3)}
+        onSkip={() => void advance({}, 7)}
       >
         <div className="space-y-2">
           <StepHeading>Як до тебе звертатися?</StepHeading>
@@ -341,16 +586,16 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 3) {
+  if (step === 7) {
     return (
       <OnboardingStep
-        step={2}
-        total={TOTAL_STEPS}
+        step={bar(7)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => go(false, () => ({ interests: state.interests }), 4)}
-        onSkip={() => void advance({}, 4)}
+        onPrimary={() => go(false, () => ({ interests: state.interests }), 8)}
+        onSkip={() => void advance({}, 8)}
       >
         <div className="space-y-2">
           <StepHeading>Що цікаво?</StepHeading>
@@ -366,16 +611,16 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 4) {
+  if (step === 8) {
     return (
       <OnboardingStep
-        step={3}
-        total={TOTAL_STEPS}
+        step={bar(8)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => go(false, () => ({ availability: state.availability }), 5)}
-        onSkip={() => void advance({}, 5)}
+        onPrimary={() => go(false, () => ({ availability: state.availability }), 9)}
+        onSkip={() => void advance({}, 9)}
       >
         <div className="space-y-2">
           <StepHeading>Коли тобі зручно?</StepHeading>
@@ -391,21 +636,21 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 5) {
+  if (step === 9) {
     return (
       <OnboardingStep
-        step={4}
-        total={TOTAL_STEPS}
+        step={bar(9)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
           void advance(
             { schedule_constraints: state.scheduleConstraints.trim() || null },
-            6,
+            10,
           )
         }
-        onSkip={() => void advance({}, 6)}
+        onSkip={() => void advance({}, 10)}
       >
         <div className="space-y-2">
           <StepHeading>Що з графіку важливо врахувати?</StepHeading>
@@ -426,18 +671,18 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 6) {
+  if (step === 10) {
     return (
       <OnboardingStep
-        step={5}
-        total={TOTAL_STEPS}
+        step={bar(10)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
-          void advance({ company_preference: state.companyPreference }, 7)
+          void advance({ company_preference: state.companyPreference }, 11)
         }
-        onSkip={() => void advance({}, 7)}
+        onSkip={() => void advance({}, 11)}
       >
         <div className="space-y-2">
           <StepHeading>В якій компанії бути?</StepHeading>
@@ -453,18 +698,18 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 7) {
+  if (step === 11) {
     return (
       <OnboardingStep
-        step={6}
-        total={TOTAL_STEPS}
+        step={bar(11)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
-          void advance({ accessibility_flags: state.accessibility }, 8)
+          void advance({ accessibility_flags: state.accessibility }, 12)
         }
-        onSkip={() => void advance({}, 8)}
+        onSkip={() => void advance({}, 12)}
       >
         <div className="space-y-2">
           <StepHeading>Що важливо для комфорту?</StepHeading>
@@ -480,18 +725,18 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 8) {
+  if (step === 12) {
     return (
       <OnboardingStep
-        step={7}
-        total={TOTAL_STEPS}
+        step={bar(12)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
-          void advance({ triggers_to_avoid: state.triggers }, 9)
+          void advance({ triggers_to_avoid: state.triggers }, 13)
         }
-        onSkip={() => void advance({}, 9)}
+        onSkip={() => void advance({}, 13)}
       >
         <div className="space-y-2">
           <StepHeading>Тригери, яких уникати?</StepHeading>
@@ -507,16 +752,16 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 9) {
+  if (step === 13) {
     return (
       <OnboardingStep
-        step={8}
-        total={TOTAL_STEPS}
+        step={bar(13)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => void advance({ veteran_status: state.veteranStatus }, 10)}
-        onSkip={() => void advance({}, 10)}
+        onPrimary={() => void advance({ veteran_status: state.veteranStatus }, 14)}
+        onSkip={() => void advance({}, 14)}
       >
         <div className="space-y-2">
           <StepHeading>Який твій статус?</StepHeading>
@@ -532,21 +777,21 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 10) {
+  if (step === 14) {
     return (
       <OnboardingStep
-        step={9}
-        total={TOTAL_STEPS}
+        step={bar(14)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         onPrimary={() =>
           void advance(
             { role_in_group: state.roleInGroup.trim() || null },
-            11,
+            15,
           )
         }
-        onSkip={() => void advance({}, 11)}
+        onSkip={() => void advance({}, 15)}
       >
         <div className="space-y-2">
           <StepHeading>Що приносиш у збір?</StepHeading>
@@ -562,16 +807,16 @@ export function OnboardingFlow() {
     );
   }
 
-  if (step === 11) {
+  if (step === 15) {
     return (
       <OnboardingStep
-        step={10}
-        total={TOTAL_STEPS}
+        step={bar(15)}
+        total={total}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
-        onPrimary={() => void advance({ age_range: state.ageRange }, 12)}
-        onSkip={() => void advance({}, 12)}
+        onPrimary={() => void advance({ age_range: state.ageRange }, 16)}
+        onSkip={() => void advance({}, 16)}
       >
         <div className="space-y-2">
           <StepHeading>Орієнтовний вік?</StepHeading>
@@ -587,11 +832,11 @@ export function OnboardingFlow() {
     );
   }
 
-  // step === 12
+  // step === 16
   return (
     <OnboardingStep
-      step={11}
-      total={TOTAL_STEPS}
+      step={bar(16)}
+      total={total}
       primaryLabel="Готово"
       skipLabel="Пропустити"
       busy={busy}
@@ -826,6 +1071,319 @@ function ModeOption({
       <span className="text-sm font-semibold leading-tight">{title}</span>
       <span className="text-xs leading-tight opacity-85">{subtitle}</span>
     </Label>
+  );
+}
+
+// ----------------------------------------------------------------
+// New step bodies
+// ----------------------------------------------------------------
+
+function AdaptationStep({
+  prefs,
+  onChange,
+}: {
+  prefs: AppPrefs;
+  onChange: (p: AppPrefs) => void;
+}) {
+  return (
+    <div className="space-y-5">
+      <FieldRow icon={<Type className="h-4 w-4" aria-hidden />} label="Розмір шрифту">
+        <ToggleGroup
+          type="single"
+          spacing={2}
+          value={prefs.fontSize}
+          onValueChange={(v) => v && onChange({ ...prefs, fontSize: v as FontSize })}
+          className="flex flex-wrap"
+          aria-label="Розмір шрифту"
+        >
+          {FONT_SIZE_OPTIONS.map((opt) => (
+            <ToggleGroupItem
+              key={opt.value}
+              value={opt.value}
+              variant="outline"
+              className={chipItemClasses}
+            >
+              {opt.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      </FieldRow>
+
+      <FieldRow
+        icon={
+          prefs.darkMode ? (
+            <Moon className="h-4 w-4" aria-hidden />
+          ) : (
+            <Sun className="h-4 w-4" aria-hidden />
+          )
+        }
+        label="Темний режим"
+      >
+        <SettingToggle
+          checked={prefs.darkMode}
+          onChange={(v) => onChange({ ...prefs, darkMode: v })}
+          ariaLabel="Темний режим"
+          rightLabel={prefs.darkMode ? "Увімкнено" : "Вимкнено"}
+        />
+      </FieldRow>
+
+      <FieldRow icon={<Palette className="h-4 w-4" aria-hidden />} label="Палітра">
+        <ToggleGroup
+          type="single"
+          spacing={2}
+          value={prefs.palette}
+          onValueChange={(v) =>
+            v && onChange({ ...prefs, palette: v as ColorblindPalette })
+          }
+          className="flex flex-wrap"
+          aria-label="Палітра кольорів"
+        >
+          {PALETTE_OPTIONS.map((opt) => (
+            <ToggleGroupItem
+              key={opt.value}
+              value={opt.value}
+              variant="outline"
+              className={chipItemClasses}
+            >
+              {opt.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <p className="text-muted-foreground pt-2 text-xs">
+          Адаптує основний колір під типи дальтонізму.
+        </p>
+      </FieldRow>
+
+      <FieldRow icon={<Mic className="h-4 w-4" aria-hidden />} label="Голосовий ввід">
+        <SettingToggle
+          checked={false}
+          onChange={() => undefined}
+          disabled
+          ariaLabel="Голосовий ввід (скоро)"
+          rightLabel="Скоро"
+        />
+      </FieldRow>
+
+      <FieldRow icon={<Volume2 className="h-4 w-4" aria-hidden />} label="Voice over">
+        <SettingToggle
+          checked={false}
+          onChange={() => undefined}
+          disabled
+          ariaLabel="Voice over (скоро)"
+          rightLabel="Скоро"
+        />
+      </FieldRow>
+
+      <p className="text-muted-foreground pt-1 text-xs">
+        Налаштування зберігаються та доступні в розділі профілю.
+      </p>
+    </div>
+  );
+}
+
+function FieldRow({
+  icon,
+  label,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="text-foreground inline-flex items-center gap-1.5 text-sm font-semibold">
+        <span className="text-primary" aria-hidden>
+          {icon}
+        </span>
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SettingToggle({
+  checked,
+  onChange,
+  disabled,
+  ariaLabel,
+  rightLabel,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  ariaLabel: string;
+  rightLabel?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "border-border bg-card text-foreground hover:border-primary/40 inline-flex h-11 w-full items-center justify-between rounded-xl border px-3 transition",
+        disabled && "cursor-not-allowed opacity-60 hover:border-border",
+      )}
+      style={{ touchAction: "manipulation" }}
+    >
+      <span className="text-sm font-medium">{rightLabel}</span>
+      <span
+        aria-hidden
+        className={cn(
+          "relative inline-flex h-6 w-10 rounded-full transition-colors",
+          checked ? "bg-primary" : "bg-border",
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 inline-block h-5 w-5 rounded-full bg-card shadow transition-all",
+            checked ? "left-[18px]" : "left-0.5",
+          )}
+        />
+      </span>
+    </button>
+  );
+}
+
+function HealthTriggerStep({
+  value,
+  onChange,
+}: {
+  value: boolean | null;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <TriggerCard
+        active={value === true}
+        title="Так"
+        subtitle="Підкажемо релевантні заклади і програми"
+        onSelect={() => onChange(true)}
+      />
+      <TriggerCard
+        active={value === false}
+        title="Ні"
+        subtitle="Покажемо звичайну стрічку"
+        onSelect={() => onChange(false)}
+      />
+    </div>
+  );
+}
+
+function TriggerCard({
+  active,
+  title,
+  subtitle,
+  onSelect,
+}: {
+  active: boolean;
+  title: string;
+  subtitle: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={active}
+      className={cn(
+        "border-border bg-card text-foreground hover:border-primary/40 flex h-auto min-h-[88px] cursor-pointer flex-col items-start justify-center gap-0.5 rounded-xl border-2 px-4 py-3 text-left transition",
+        active &&
+          "border-primary bg-primary text-primary-foreground hover:border-primary",
+      )}
+      style={{ touchAction: "manipulation" }}
+    >
+      <span className="inline-flex items-center gap-1.5 text-sm font-semibold leading-tight">
+        <Heart
+          className={cn("h-3.5 w-3.5", active ? "fill-current" : "")}
+          aria-hidden
+        />
+        {title}
+      </span>
+      <span className="text-xs leading-snug opacity-85">{subtitle}</span>
+    </button>
+  );
+}
+
+function HealthCategoryStep({
+  value,
+  onChange,
+}: {
+  value: HealthCategory | null;
+  onChange: (v: HealthCategory) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <ToggleGroup
+        type="single"
+        spacing={2}
+        value={value ?? ""}
+        onValueChange={(v) => v && onChange(v as HealthCategory)}
+        className="flex flex-wrap"
+        aria-label="Категорія допомоги"
+      >
+        {HEALTH_CATEGORY_OPTIONS.map((opt) => (
+          <ToggleGroupItem
+            key={opt.value}
+            value={opt.value}
+            variant="outline"
+            disabled={opt.soon}
+            className={chipItemClasses}
+            aria-label={opt.soon ? `${opt.label} (скоро)` : opt.label}
+          >
+            {opt.label}
+            {opt.soon ? (
+              <span className="text-muted-foreground/80 ml-1 text-xs font-normal lowercase">
+                · скоро
+              </span>
+            ) : null}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
+  );
+}
+
+function HealthDirectionStep({
+  options,
+  value,
+  onChange,
+}: {
+  options: Option<string>[];
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  if (options.length === 0) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        Для цієї категорії напрямки скоро.
+      </p>
+    );
+  }
+  return (
+    <ToggleGroup
+      type="multiple"
+      spacing={2}
+      value={value}
+      onValueChange={(v) => onChange(v)}
+      className="flex flex-wrap"
+      aria-label="Напрямки"
+    >
+      {options.map((opt) => (
+        <ToggleGroupItem
+          key={opt.value}
+          value={opt.value}
+          variant="outline"
+          className={chipItemClasses}
+        >
+          {opt.label}
+        </ToggleGroupItem>
+      ))}
+    </ToggleGroup>
   );
 }
 

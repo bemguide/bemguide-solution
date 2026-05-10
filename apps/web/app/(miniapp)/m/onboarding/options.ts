@@ -14,8 +14,79 @@ import type {
   CompanyPreference,
   VeteranStatus,
 } from "@/lib/api";
+import type {
+  ColorblindPalette,
+  FontSize,
+  HealthCategory,
+} from "@/lib/app-prefs";
 
 export type Option<T extends string> = { value: T; label: string };
+
+/** Variant of `Option` that supports a "soon" flag for in-progress
+ *  features rendered disabled with a "Скоро" badge. */
+export type RoadmapOption<T extends string> = Option<T> & { soon?: boolean };
+
+// ---------------------------------------------------------------
+// New steps: Адаптація застосунку (accessibility prefs)
+// ---------------------------------------------------------------
+
+export const FONT_SIZE_OPTIONS: Option<FontSize>[] = [
+  { value: "s", label: "Менший" },
+  { value: "m", label: "Звичайний" },
+  { value: "l", label: "Більший" },
+];
+
+export const PALETTE_OPTIONS: Option<ColorblindPalette>[] = [
+  { value: "standard", label: "Стандарт" },
+  { value: "protanopia", label: "Протанопія" },
+  { value: "deuteranopia", label: "Дейтеранопія" },
+  { value: "tritanopia", label: "Тританопія" },
+];
+
+// ---------------------------------------------------------------
+// New steps: блок «Здоров'я»
+// ---------------------------------------------------------------
+
+export const HEALTH_CATEGORY_OPTIONS: RoadmapOption<HealthCategory>[] = [
+  { value: "treatment", label: "Лікування" },
+  { value: "rehabilitation", label: "Реабілітація" },
+  { value: "mental_health", label: "Ментальне здоров'я" },
+  { value: "prosthetics", label: "Протезування", soon: true },
+  { value: "dentistry", label: "Стоматологія", soon: true },
+];
+
+/** Per-category direction lists. Empty array means "no directions
+ *  configured yet" (e.g. `prosthetics`/`dentistry` are gated behind
+ *  the «Скоро» state and never show this step). */
+export const HEALTH_DIRECTIONS: Record<HealthCategory, Option<string>[]> = {
+  treatment: [
+    { value: "oncology", label: "Лікування онкологічних захворювань" },
+    { value: "primary", label: "Первинна медична допомога" },
+    { value: "palliative", label: "Паліативна медична допомога" },
+    { value: "ophthalmology", label: "Офтальмологічна допомога" },
+    { value: "transplantation", label: "Трансплантація" },
+    { value: "gynecology_urology", label: "Гінекологія і урологія" },
+    { value: "available_drugs", label: "Доступні ліки" },
+    { value: "aesthetic", label: "Естетична медицина (рубці, шрами)" },
+  ],
+  rehabilitation: [
+    { value: "outpatient", label: "Амбулаторна реабілітація" },
+    { value: "centers_map", label: "Мапа з реабілітаційними центрами" },
+    { value: "inpatient", label: "Стаціонарна реабілітація" },
+    { value: "aids", label: "Допоміжні засоби реабілітації" },
+    { value: "after_captivity", label: "Реабілітація після полону" },
+    { value: "vision_loss_adapt", label: "Адаптація для тих, хто втратив зір" },
+    { value: "abroad", label: "Реабілітація за кордоном" },
+  ],
+  mental_health: [
+    { value: "psychology", label: "Психологічні послуги" },
+    { value: "support_groups", label: "Групи підтримки" },
+    { value: "psychiatry", label: "Психіатрична допомога" },
+    { value: "addictions", label: "Лікування залежностей" },
+  ],
+  prosthetics: [],
+  dentistry: [],
+};
 
 // Q3 — interests (multi). Subset of @poruch/shared's INTEREST_CATEGORIES
 // curated for onboarding ergonomics. Backend stores as text[]; matches

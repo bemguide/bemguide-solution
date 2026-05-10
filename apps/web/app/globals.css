@@ -67,6 +67,75 @@
   --input: #e5dbc5;
   --ring: #2b6e5a;
   --radius: 12px;
+  /* multiplier for body font-size — set by app-prefs.applyAppPrefs(). */
+  --app-font-scale: 1;
+}
+
+/* Dark mode — same calm palette inverted so the cream/teal warmth
+   carries over rather than going corporate-blue. Applied via
+   .dark class set on <html> by app-prefs. */
+.dark {
+  --background: #16201f;
+  --foreground: #f4ecdd;
+  --card: #1f2a2e;
+  --card-foreground: #f4ecdd;
+  --popover: #1f2a2e;
+  --popover-foreground: #f4ecdd;
+  --primary: #4ea389;
+  --primary-foreground: #0d1817;
+  --secondary: #2a3a3a;
+  --secondary-foreground: #f4ecdd;
+  --muted: #2a3a3a;
+  --muted-foreground: #a5b3b3;
+  --accent: #1f4434;
+  --accent-foreground: #ddeee7;
+  --warning: #d8915d;
+  --warning-foreground: #16201f;
+  --destructive: #cf5b5b;
+  --destructive-foreground: #f4ecdd;
+  --honest-absence: #663030;
+  --honest-absence-foreground: #f5d8d2;
+  --border: #3a4848;
+  --input: #3a4848;
+  --ring: #4ea389;
+}
+
+/* Colour-blind palette overrides. Shift `--primary`, `--ring`, and
+   `--accent` away from the hue pairs each condition can't resolve.
+   We intentionally only override these three vars so the rest of the
+   palette (cream background, neutral text) stays warm and familiar. */
+:root[data-palette="protanopia"],
+:root[data-palette="deuteranopia"] {
+  /* Red-green confusion — shift the brand teal toward unambiguous blue. */
+  --primary: #2a6e9c;
+  --primary-foreground: #ffffff;
+  --ring: #2a6e9c;
+  --accent: #d6e6f0;
+  --accent-foreground: #103a55;
+}
+:root.dark[data-palette="protanopia"],
+:root.dark[data-palette="deuteranopia"] {
+  --primary: #5fa3cf;
+  --primary-foreground: #0d1817;
+  --ring: #5fa3cf;
+  --accent: #103a55;
+  --accent-foreground: #d6e6f0;
+}
+:root[data-palette="tritanopia"] {
+  /* Blue-yellow confusion — shift toward warm red, easily separated
+     from the cream background and the neutral foreground. */
+  --primary: #b04050;
+  --primary-foreground: #ffffff;
+  --ring: #b04050;
+  --accent: #f0d0d6;
+  --accent-foreground: #4a141a;
+}
+:root.dark[data-palette="tritanopia"] {
+  --primary: #d96a78;
+  --primary-foreground: #0d1817;
+  --ring: #d96a78;
+  --accent: #4a141a;
+  --accent-foreground: #f0d0d6;
 }
 
 @layer base {
@@ -76,6 +145,10 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    /* `--app-font-scale` is set by `app-prefs.applyAppPrefs()` so the
+       Адаптація онбординг step can scale every text element with one
+       knob (0.92 / 1 / 1.14) instead of editing per-component sizes. */
+    font-size: calc(16px * var(--app-font-scale, 1));
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

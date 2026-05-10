@@ -49,6 +49,13 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**.picsum.photos" },
       { protocol: "https", hostname: "*.supabase.co" },
       { protocol: "https", hostname: "*.supabase.in" },
+      // Admin-pasted image URLs sometimes come from Flickr, used in the
+      // wild for places/health resources. Allowlist the static CDN tree
+      // (`live.staticflickr.com`, `farm{N}.staticflickr.com`,
+      // `c{N}.staticflickr.com`) so Next/image's optimizer doesn't 400
+      // them. Long-term: pipe admin uploads through Supabase Storage and
+      // drop these foreign hosts.
+      { protocol: "https", hostname: "**.staticflickr.com" },
       // TG profile photo URLs land on cdn4.cachefly.net or
       // t.me — keep `<img>` fallback in MeClient instead of next/image
       // for those, but allowlist common patterns just in case we

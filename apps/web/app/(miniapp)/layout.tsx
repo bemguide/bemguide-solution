@@ -6,6 +6,8 @@
 
 import type { Metadata } from "next";
 import { TgInit } from "./TgInit";
+import { ApplyAppPrefs } from "@/components/poruch/ApplyAppPrefs";
+import { SupportBanner } from "@/components/poruch/SupportBanner";
 
 export const metadata: Metadata = {
   title: "Поруч",
@@ -16,6 +18,7 @@ export default function MiniappLayout({ children }: { children: React.ReactNode 
   return (
     <>
       <TgInit />
+      <ApplyAppPrefs />
       {/*
         Layout is exactly one TMA viewport tall — fall back to 100dvh outside Telegram.
         overflow-hidden so children control their own scroll surfaces; keeps the iOS
@@ -37,7 +40,13 @@ export default function MiniappLayout({ children }: { children: React.ReactNode 
           paddingRight: "var(--tg-safe-area-inset-right, 0px)",
         }}
       >
-        {children}
+        {/* Always-visible psychological-support hotline. Sits above
+            every screen in the miniapp flow — see component header
+            for rationale. `min-h-0` on the children container so
+            nested flex routes (onboarding, /m/(tabs)/*) can still
+            shrink to fit and engage their own overflow-y-auto. */}
+        <SupportBanner />
+        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
       </div>
     </>
   );
