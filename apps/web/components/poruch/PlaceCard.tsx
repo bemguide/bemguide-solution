@@ -1,30 +1,25 @@
 // Card variant for `opportunity_health` rows surfaced via
-// `GET /feed?filter=health`. Static resources — no schedule, no RSVP,
-// no attendee list. Anchored on address + visit_count instead.
+// `GET /feed?filter=health`. Static resources — no schedule, no
+// RSVP, no attendee list. Anchored on address + visit_count.
 //
-// Whole card is a Link that opens Google Maps for the address. Once
-// we add a dedicated detail page for health resources we can swap
-// the href; until then the most useful action a user can take from
-// here is "get directions".
+// Tap target: the whole card is a Next Link to the dedicated detail
+// page at `/m/place/[id]`, matching the convention every other feed
+// card follows (opportunity → /m/event/[id]). Maps used to fire on
+// any tap, which broke the model — users couldn't see the rest of
+// the place's info without leaving the app. The detail page now
+// owns the maps action via a "Маршрут" button.
 
 import Image from "next/image";
+import Link from "next/link";
 import { MapPin, Users } from "lucide-react";
 import { ACCESSIBILITY_LABELS_UK } from "@poruch/shared";
 import type { OpportunityHealthCard } from "@/lib/api";
 import { Autolink } from "./Autolink";
 
 export function PlaceCard({ place }: { place: OpportunityHealthCard }) {
-  const mapsHref = place.address
-    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-        `${place.city} ${place.address}`,
-      )}`
-    : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.title)}`;
-
   return (
-    <a
-      href={mapsHref}
-      target="_blank"
-      rel="noopener noreferrer"
+    <Link
+      href={`/m/place/${place.id}`}
       className="bg-card border-border focus-visible:ring-ring block overflow-hidden rounded-xl border transition hover:shadow-sm focus-visible:outline-none focus-visible:ring-2"
     >
       {place.photo_url ? (
@@ -78,6 +73,6 @@ export function PlaceCard({ place }: { place: OpportunityHealthCard }) {
           </p>
         ) : null}
       </div>
-    </a>
+    </Link>
   );
 }
