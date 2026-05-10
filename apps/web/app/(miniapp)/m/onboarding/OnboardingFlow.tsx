@@ -1,8 +1,8 @@
-// 14–16 single-question substeps + 1 greeting over the v2 `users`
-// schema plus two locally-stored namespaces (AppPrefs, HealthPrefs).
-// Each screen asks exactly one thing — keeps tap targets big, the
-// progress strip honest, and avoids "wall of form" on the comfort and
-// about screens that previously stacked 3-4 fields.
+// Single-question substeps + 1 greeting over the v2 `users` schema
+// plus two locally-stored namespaces (AppPrefs, HealthPrefs). Each
+// screen asks exactly one thing — keeps tap targets big, the progress
+// strip honest, and avoids "wall of form" on the comfort and about
+// screens that previously stacked 3-4 fields.
 //
 //   step  field                  PATCH /me slice / local
 //   ────  ─────────────────────  ────────────────────────────────
@@ -24,6 +24,18 @@
 //   15    age_range              { age_range }
 //   16    bio                    { bio }
 //
+// Two flow shapes share the first three steps and then diverge on
+// the answer to step 3 (health needed?):
+//
+//   "Так" → 4, 5, done.  (5 questions total — health-only flow)
+//   "Ні"  → 6 … 16, done. (14 questions total — general flow)
+//
+// Picking "Так" on step 3 means the user is here primarily for
+// health resources; the demographic/interests/availability arc isn't
+// useful to them right now and trying to drag them through it costs
+// us drop-off. The local `HealthPrefs` is enough to seed the health
+// feed; everything else can stay null until the user volunteers it.
+//
 // Pre-fill from Telegram (where TG exposes it):
 //   - display_name <- initDataUnsafe.user.first_name (waits for SDK)
 //
@@ -31,14 +43,14 @@
 //   evt_<id>   → /m/event/<id>
 //   defer_<id> → /m/feed
 //
-// Progress bar maths:
-//   - When the user picks "no" on step 3 (health), steps 4 and 5 are
-//     skipped → total bars drop from 16 to 14 and bar indices for
-//     steps 6+ shrink by 2. `barIndex()` and `totalBars()` encode it.
+// Back navigation: each `advance()` pushes the current step onto a
+// history stack; the back chevron in the header (and Telegram's
+// native BackButton when present) pops it. On step 0 (greeting) the
+// stack is empty and no back affordance shows.
 //
 // AppPrefs and HealthPrefs are V0 localStorage-only. The agent
-// backend / v2 backend haven't gained these fields yet — when they do,
-// swap `saveAppPrefs` / `saveHealthPrefs` for API calls.
+// backend / v2 backend haven't gained these fields yet — when they
+// do, swap `saveAppPrefs` / `saveHealthPrefs` for API calls.
 
 "use client";
 
@@ -74,6 +86,7 @@ import {
   tgLocationDenied,
   tgOpenLocationSettings,
 } from "@/lib/telegram/client";
+import { useTelegramBackButton } from "@/lib/telegram/back-button";
 import { cn } from "@/lib/utils";
 import {
   describeError,
@@ -114,8 +127,10 @@ import {
   type Option,
 } from "./options";
 
-const TOTAL_STEPS_NO_HEALTH = 14;
-const TOTAL_STEPS_WITH_HEALTH = 16;
+// Bar counts per flow shape. The greeting (step 0) renders -1 (no bar
+// filled), so these counts are the number of *question* bars rendered.
+const TOTAL_BARS_GENERAL_FLOW = 14; // steps 1, 2, 3, 6…16
+const TOTAL_BARS_HEALTH_FLOW = 5; // steps 1, 2, 3, 4, 5
 
 /**
  * Demo restriction: backend seed data only covers Дніпро for now, so
@@ -215,22 +230,34 @@ const initialState: FormState = {
 /**
  * Map a global step (0..16) onto the bar index that should be filled
  * by the time the user lands on that screen. Greeting renders -1 (no
- * bars). When the user said "no" on step 3, steps 4–5 are skipped, so
- * step 6 lands on bar 3 instead of bar 5.
+ * bars).
+ *
+ * Two ranges with no overlap in real navigation:
+ *   - 1..5 → bar = step - 1 (general first three + health subflow)
+ *   - 6..16 → bar = step - 3 (only general flow; we skipped 4 & 5)
+ *
+ * The healthYes flag isn't needed for the math — steps 4/5 and steps
+ * 6+ are mutually exclusive paths, so the "step ≤ 5" branch only ever
+ * fires on the actual route the user is on.
  */
-function barIndex(globalStep: number, healthYes: boolean): number {
+function barIndex(globalStep: number): number {
   if (globalStep === 0) return -1;
   if (globalStep <= 5) return globalStep - 1;
-  return healthYes ? globalStep - 1 : globalStep - 3;
+  return globalStep - 3;
 }
 
 function totalBars(healthYes: boolean): number {
-  return healthYes ? TOTAL_STEPS_WITH_HEALTH : TOTAL_STEPS_NO_HEALTH;
+  return healthYes ? TOTAL_BARS_HEALTH_FLOW : TOTAL_BARS_GENERAL_FLOW;
 }
 
 export function OnboardingFlow() {
   const router = useRouter();
   const [step, setStep] = useState<StepIndex>(0);
+  // History stack: every advance() pushes the step we're leaving so
+  // back navigation can pop and restore it. Pure stack (no replay
+  // logic) — re-rendering the previous step recovers the form state
+  // because state itself is preserved in `state`/local prefs.
+  const [history, setHistory] = useState<StepIndex[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bypassed, setBypassed] = useState(false);
@@ -283,6 +310,15 @@ export function OnboardingFlow() {
     };
   }, [router]);
 
+  // Wire Telegram's native BackButton (the arrow in the TMA header)
+  // to the same handler we use for the in-app chevron. Pass `null`
+  // when the stack is empty so the SDK button is actively hidden —
+  // without this it would dangle pointing nowhere on the greeting.
+  // Must sit before the `bypassed` early-return to satisfy the
+  // rules-of-hooks order invariant.
+  const canGoBack = history.length > 0;
+  useTelegramBackButton(canGoBack ? goBack : null);
+
   if (bypassed) return null;
 
   async function persist(patch: UserPatch): Promise<boolean> {
@@ -301,11 +337,27 @@ export function OnboardingFlow() {
     setError(null);
     try {
       if (patch && Object.keys(patch).length > 0) await persist(patch);
-      if (next === "done") router.push("/m/feed");
-      else setStep(next);
+      if (next === "done") {
+        router.push("/m/feed");
+        return;
+      }
+      // Push the current step so back can pop to it.
+      setHistory((h) => [...h, step]);
+      setStep(next);
     } finally {
       setBusy(false);
     }
+  }
+
+  function goBack() {
+    if (busy) return;
+    setHistory((h) => {
+      if (h.length === 0) return h;
+      const prev = h[h.length - 1]!;
+      setStep(prev);
+      return h.slice(0, -1);
+    });
+    setError(null);
   }
 
   // ---------- Per-step commits ----------
@@ -364,13 +416,15 @@ export function OnboardingFlow() {
 
   const healthYes = state.healthNeeded === true;
   const total = totalBars(healthYes);
-  const bar = (gs: number) => barIndex(gs, healthYes);
+  const bar = (gs: number) => barIndex(gs);
+  const backProp = canGoBack ? goBack : undefined;
 
   if (step === 0) {
     return (
       <OnboardingStep
         step={bar(0)}
         total={total}
+        onBack={backProp}
         primaryLabel="Подивитись поруч"
         busy={busy}
         onPrimary={() => void advance(null, 1)}
@@ -393,6 +447,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(1)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Не зараз, тільки гляну"
         busy={busy}
@@ -423,6 +478,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(2)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -444,6 +500,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(3)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -487,12 +544,16 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(4)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
         primaryDisabled={state.healthCategory === null}
         onPrimary={() => void advance(null, 5)}
-        onSkip={() => void advance(null, 6)}
+        // Skip stays inside the health flow — go to the next health
+        // question, not the general flow. Health-only users picked
+        // "Так" to opt OUT of the rest of onboarding.
+        onSkip={() => void advance(null, 5)}
       >
         <div className="space-y-2">
           <StepHeading>Обери</StepHeading>
@@ -525,11 +586,14 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(5)}
         total={total}
-        primaryLabel="Далі"
-        skipLabel="Пропустити"
+        onBack={backProp}
+        // Health-only flow's last screen — primary completes
+        // onboarding instead of pushing into the general questionnaire.
+        primaryLabel="Готово"
+        skipLabel="Завершити без напрямків"
         busy={busy}
-        onPrimary={() => void advance(null, 6)}
-        onSkip={() => void advance(null, 6)}
+        onPrimary={() => void advance(null, "done")}
+        onSkip={() => void advance(null, "done")}
       >
         <div className="space-y-2">
           <StepHeading>Обери напрямок</StepHeading>
@@ -557,6 +621,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(6)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -591,6 +656,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(7)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -616,6 +682,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(8)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -641,6 +708,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(9)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -676,6 +744,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(10)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -703,6 +772,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(11)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -730,6 +800,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(12)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -757,6 +828,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(13)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -782,6 +854,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(14)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}
@@ -812,6 +885,7 @@ export function OnboardingFlow() {
       <OnboardingStep
         step={bar(15)}
         total={total}
+        onBack={backProp}
         primaryLabel="Далі"
         skipLabel="Пропустити"
         busy={busy}

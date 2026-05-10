@@ -1,17 +1,18 @@
-// /m/feed — miniapp home. Three tabs across the same `/feed` endpoint:
+// /m/feed — miniapp home. Four tabs across the same `/feed` endpoint:
 //
-//   "Все"     → `getFeed()`              → today_tomorrow / this_week / try_new
-//   "Здоровʼя" → `getFeed({ filter: 'health' })`     → flat list, mixed sources
-//   "Знижки"  → `getFeed({ filter: 'discounts' })`   → flat list, mixed sources
+//   "Все"      → `getFeed()`                          → today_tomorrow / this_week / try_new
+//   "Здоровʼя" → `getFeed({ filter: 'health' })`      → flat list, mixed sources
+//   "Знижки"   → `getFeed({ filter: 'discounts' })`   → flat list, mixed sources
+//   "Програми" → `getProgramsFeed()`                  → state programs grouped by category + hotlines
 //
-// Filtered tabs return `FeedItem`s that can be either `opportunity`
-// (event card with RSVP + start_at) or `opportunity_health` (always-on
-// place card with map link + visit_count). The `source` discriminator
-// picks which card renders.
+// Filtered tabs (health/discounts) return `FeedItem`s that can be either
+// `opportunity` (event card with RSVP + start_at) or `opportunity_health`
+// (always-on place card). Programs return their own shape — see
+// docs/PROGRAMS_FEED_CONTRACT.md.
 //
 // Default tab keeps the localStorage stale-while-revalidate dance from
-// before. Filtered tabs fetch fresh on switch — they're lighter and
-// less worth caching.
+// before. Filtered tabs and the programs tab fetch fresh on switch —
+// they're lighter and less worth caching.
 
 "use client";
 
@@ -19,6 +20,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { CompactEventCard, FeaturedEventCard } from "@/components/poruch/EventCard";
 import { PlaceCard } from "@/components/poruch/PlaceCard";
+import { ProgramCard } from "@/components/poruch/ProgramCard";
+import { HotlinesBlock } from "@/components/poruch/HotlinesBlock";
 import { SectionHeader } from "@/components/poruch/SectionHeader";
 import { EmptyState } from "@/components/poruch/EmptyState";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -26,6 +29,7 @@ import {
   describeError,
   getCurrentUser,
   getFeed,
+  getProgramsFeed,
   isNoTelegramEnv,
   logApiError,
   opportunityToDisplay,
@@ -33,10 +37,14 @@ import {
   writeFeedCache,
   type FeedItem,
   type FeedResponse,
+  type ProgramCategory,
+  type ProgramFeedItem,
+  type ProgramsFeedResponse,
+  type V2User,
 } from "@/lib/api";
 import type { EventForDisplay } from "@/lib/types";
 
-type Tab = "all" | "health" | "discounts";
+type Tab = "all" | "health" | "discounts" | "programs";
 
 type DisplaySections = {
   today_tomorrow: EventForDisplay[];
@@ -56,6 +64,28 @@ const TAB_LABEL: Record<Tab, string> = {
   all: "Все",
   health: "Здоровʼя",
   discounts: "Знижки",
+  programs: "Програми",
+};
+
+// Stable category order from the contract. Categories absent from the
+// response don't render — but when present we always show them in this
+// sequence so the user's mental model is "health first, support last".
+const PROGRAM_CATEGORY_ORDER: ProgramCategory[] = [
+  "health",
+  "money",
+  "housing",
+  "education_work",
+  "sport_recreation",
+  "support",
+];
+
+const PROGRAM_CATEGORY_HEADING: Record<ProgramCategory, string> = {
+  health: "🩺 Здоров'я",
+  money: "💰 Гроші",
+  housing: "🏠 Житло",
+  education_work: "🎓 Освіта і робота",
+  sport_recreation: "🏋️ Спорт і відпочинок",
+  support: "🤝 Підтримка",
 };
 
 const chipItemClasses =
@@ -68,11 +98,19 @@ export function FeedClient() {
   const [sections, setSections] = useState<DisplaySections | null>(null);
   const [city, setCity] = useState<string | undefined>(undefined);
   const [defaultError, setDefaultError] = useState<string | null>(null);
+  // We keep a copy of the user so the programs tab can show the
+  // "обери статус" soft prompt when veteran_status is null.
+  const [me, setMe] = useState<V2User | null>(null);
 
   // Filtered-tab state (per filter; refetched on switch).
   const [filtered, setFiltered] = useState<FeedItem[] | null>(null);
   const [filteredLoading, setFilteredLoading] = useState(false);
   const [filteredError, setFilteredError] = useState<string | null>(null);
+
+  // Programs-tab state — distinct shape from filtered (items + hotlines).
+  const [programs, setPrograms] = useState<ProgramsFeedResponse | null>(null);
+  const [programsLoading, setProgramsLoading] = useState(false);
+  const [programsError, setProgramsError] = useState<string | null>(null);
 
   // Default tab — runs once on mount, mirrors the previous behaviour.
   useEffect(() => {
@@ -87,13 +125,14 @@ export function FeedClient() {
 
     async function load() {
       try {
-        const [me, v2] = await Promise.all([
+        const [meRes, v2] = await Promise.all([
           getCurrentUser().catch(() => null),
           getFeed(),
         ]);
         if (cancelled) return;
 
-        const myCity = me?.city ?? cached?.city;
+        const myCity = meRes?.city ?? cached?.city;
+        setMe(meRes);
         setCity(myCity ?? undefined);
         setSections(adapt(v2));
         setDefaultError(null);
@@ -122,24 +161,29 @@ export function FeedClient() {
     };
   }, []);
 
-  // Filtered tabs — refetch when the user switches to one.
+  // Filtered tabs (health / discounts) — refetch when the user
+  // switches to one.
   useEffect(() => {
-    if (tab === "all") return;
+    if (tab !== "health" && tab !== "discounts") return;
+    // Capture in a const so the type narrowing survives across the
+    // async IIFE boundary — TS widens `tab` back to the full Tab
+    // union inside the inner closure otherwise.
+    const filter = tab;
     let cancelled = false;
     setFilteredLoading(true);
     setFilteredError(null);
     void (async () => {
       try {
-        const res = await getFeed({ filter: tab });
+        const res = await getFeed({ filter });
         if (cancelled) return;
         setFiltered(res.items);
 
         if (process.env.NODE_ENV !== "production") {
-          console.debug(`[feed] filter=${tab} returned ${res.items.length} items`);
+          console.debug(`[feed] filter=${filter} returned ${res.items.length} items`);
         }
       } catch (e) {
         if (cancelled) return;
-        logApiError(`feed.${tab}`, e);
+        logApiError(`feed.${filter}`, e);
         if (isNoTelegramEnv(e)) setFilteredError("no_telegram_environment");
         else setFilteredError(describeError(e, "feed"));
       } finally {
@@ -151,11 +195,42 @@ export function FeedClient() {
     };
   }, [tab]);
 
+  // Programs tab — distinct response shape (`items + hotlines`).
+  useEffect(() => {
+    if (tab !== "programs") return;
+    let cancelled = false;
+    setProgramsLoading(true);
+    setProgramsError(null);
+    void (async () => {
+      try {
+        const res = await getProgramsFeed();
+        if (cancelled) return;
+        setPrograms(res);
+        if (process.env.NODE_ENV !== "production") {
+          console.debug(
+            `[feed] programs returned items=${res.items.length} hotlines=${res.hotlines.length}`,
+          );
+        }
+      } catch (e) {
+        if (cancelled) return;
+        logApiError("feed.programs", e);
+        if (isNoTelegramEnv(e)) setProgramsError("no_telegram_environment");
+        else setProgramsError(describeError(e, "feed"));
+      } finally {
+        if (!cancelled) setProgramsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [tab]);
+
   // The "Open in Telegram" CTA preempts everything else.
   const noTg =
     defaultError === "no_telegram_environment" ||
-    filteredError === "no_telegram_environment";
-  if (noTg && !sections && !filtered) {
+    filteredError === "no_telegram_environment" ||
+    programsError === "no_telegram_environment";
+  if (noTg && !sections && !filtered && !programs) {
     return <OpenInTelegramScreen />;
   }
 
@@ -168,6 +243,13 @@ export function FeedClient() {
           sections={sections}
           city={city}
           error={defaultError === "no_telegram_environment" ? null : defaultError}
+        />
+      ) : tab === "programs" ? (
+        <ProgramsBody
+          data={programs}
+          loading={programsLoading}
+          error={programsError === "no_telegram_environment" ? null : programsError}
+          veteranStatusKnown={Boolean(me?.veteran_status)}
         />
       ) : (
         <FilteredBody
@@ -306,7 +388,7 @@ function FilteredBody({
   error,
   city,
 }: {
-  tab: Tab;
+  tab: "health" | "discounts";
   items: FeedItem[] | null;
   loading: boolean;
   error: string | null;
@@ -355,6 +437,104 @@ function FilteredBody({
       )}
     </div>
   );
+}
+
+function ProgramsBody({
+  data,
+  loading,
+  error,
+  veteranStatusKnown,
+}: {
+  data: ProgramsFeedResponse | null;
+  loading: boolean;
+  error: string | null;
+  /**
+   * Drives the soft "обери статус" prompt at the top of the body.
+   * The contract returns *every* program when veteran_status is null,
+   * so this is purely a UX nudge — never a gate.
+   */
+  veteranStatusKnown: boolean;
+}) {
+  if (loading && !data) return <FeedSkeleton />;
+
+  if (error && !data) {
+    return (
+      <EmptyState
+        title="Не вдалось завантажити програми"
+        body={error}
+        action={
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="text-primary text-sm underline-offset-2 hover:underline"
+          >
+            Спробувати ще
+          </button>
+        }
+      />
+    );
+  }
+
+  if (!data) return <FeedSkeleton />;
+
+  const grouped = groupByCategory(data.items);
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader
+        title="Безкоштовні державні програми"
+        subtitle="Що вже доступне ветеранам — без черг, з лінком на офіційне джерело."
+      />
+
+      {!veteranStatusKnown ? (
+        <Link
+          href="/m/onboarding"
+          className="bg-accent/40 border-border text-foreground hover:border-primary/40 block rounded-xl border px-4 py-3 text-sm transition-colors"
+        >
+          <strong className="font-semibold">Обери свій статус</strong>{" "}
+          <span className="text-muted-foreground">
+            у профілі — покажемо лише ті програми, що тобі реально доступні.
+          </span>
+        </Link>
+      ) : null}
+
+      {data.items.length === 0 ? (
+        <EmptyState
+          title="Поки що нічого не підходить"
+          body="Спробуй пізніше або глянь гарячі лінії нижче — там підкажуть, куди звернутися."
+        />
+      ) : (
+        PROGRAM_CATEGORY_ORDER.filter(
+          (c) => (grouped.get(c)?.length ?? 0) > 0,
+        ).map((category) => (
+          <section key={category} className="space-y-3">
+            <h2 className="text-foreground text-base font-semibold">
+              {PROGRAM_CATEGORY_HEADING[category]}
+            </h2>
+            <div className="space-y-3">
+              {(grouped.get(category) ?? []).map((p) => (
+                <ProgramCard key={p.id} program={p} />
+              ))}
+            </div>
+          </section>
+        ))
+      )}
+
+      <HotlinesBlock hotlines={data.hotlines} />
+    </div>
+  );
+}
+
+function groupByCategory(
+  items: ProgramFeedItem[],
+): Map<ProgramCategory, ProgramFeedItem[]> {
+  const out = new Map<ProgramCategory, ProgramFeedItem[]>();
+  for (const item of items) {
+    const list = out.get(item.program_category);
+    if (list) list.push(item);
+    else out.set(item.program_category, [item]);
+  }
+  return out;
 }
 
 function FeedSkeleton() {
