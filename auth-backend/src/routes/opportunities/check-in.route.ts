@@ -4,17 +4,26 @@ import { authGuard } from '../../plugins/auth-guard.js';
 import { AppError } from '../../utils/errors.js';
 import { supabaseAdmin } from '../../config/supabase.js';
 import { verifyCheckInToken } from '../../services/session.service.js';
-import { getById } from '../../services/opportunities.service.js';
 import { updateStatus } from '../../services/attendees.service.js';
 import { parseOrThrow } from '../../utils/validation.js';
 
 // POST /opportunities/:id/check-in
 //
-// Counterpart to GET /opportunities/:id/check-in-token. Scanner (admin or
-// event organizer) presents:
+// Counterpart to GET /opportunities/:id/check-in-token. Any authenticated
+// user can act as scanner; the verification trust comes from the signed QR
+// token, not from the scanner's role. Scanner presents:
 //   * Bearer = scanner's session JWT
 //   * Body { token } = the attendee's QR JWT (audience='check-in', event_id
 //     bound, sub=user_id)
+//
+// Why no organizer gate: opportunities.created_by is unpopulated for the
+// existing inventory, so a strict admin/organizer check 403s every real
+// scan. The QR token itself already binds (signature, audience='check-in',
+// event_id, short TTL, mintable only for attendees with status joining/
+// attended), and step 2 below pins the URL :id to the token's event_id, so
+// a stolen token can't be redeemed at a different event. If venue-side
+// abuse becomes a concern, re-add the gate behind a `created_by IS NOT NULL`
+// fallback once new opportunities consistently track their organizer.
 //
 // Idempotent: a second call with the same token after status='attended' is
 // a 200 no-op. Any failure mode of the QR token (signature, expiry, audience,
@@ -41,18 +50,7 @@ export async function opportunityCheckInRoute(app: FastifyInstance): Promise<voi
         throw AppError.unauthenticated('Invalid check-in token (event mismatch)');
       }
 
-      // 3. Load opportunity for organizer authz.
-      const opp = await getById(eventId);
-      if (!opp) throw AppError.notFound('Opportunity not found');
-
-      // 4. Scanner must be admin OR the event's organizer.
-      const isAdmin = req.user.role === 'admin';
-      const isOrganizer = opp.created_by !== null && opp.created_by === req.user.id;
-      if (!isAdmin && !isOrganizer) {
-        throw AppError.forbidden('Admin or event organizer required');
-      }
-
-      // 5. Look up attendee. Missing row or non-checkable status → 401, mirrors
+      // 3. Look up attendee. Missing row or non-checkable status → 401, mirrors
       //    the gate in check-in-token.route.ts:32-38 that only mints tokens
       //    for joining/attended.
       const { data: attendee, error: attErr } = await supabaseAdmin
@@ -64,7 +62,7 @@ export async function opportunityCheckInRoute(app: FastifyInstance): Promise<voi
       if (attErr) throw AppError.upstream('Failed to load attendee', attErr.message);
       if (!attendee) throw AppError.unauthenticated('Invalid check-in token (no attendee)');
 
-      // 6. Idempotent transition. joining → attended. attended is a no-op.
+      // 4. Idempotent transition. joining → attended. attended is a no-op.
       let updated = attendee;
       if (attendee.status === 'joining') {
         updated = await updateStatus(payload.user_id, eventId, 'attended');
@@ -74,7 +72,7 @@ export async function opportunityCheckInRoute(app: FastifyInstance): Promise<voi
         throw AppError.unauthenticated(`Invalid check-in token (status: ${attendee.status})`);
       }
 
-      // 7. Optional user payload for scanner UX (greeting, name, etc.). Best-
+      // 5. Optional user payload for scanner UX (greeting, name, etc.). Best-
       //    effort — if the read fails for some reason we still return ok=true.
       const { data: user } = await supabaseAdmin
         .from('users')

@@ -165,7 +165,10 @@ describeIfReal('opportunity ownership + check-in', () => {
     expect(res.json().attendee.status).toBe('attended');
   });
 
-  it('returns 403 when scanner is neither admin nor organizer', async () => {
+  it('any authenticated user can scan a valid QR (no organizer gate)', async () => {
+    // Verification trust is on the signed QR token, not on the scanner role.
+    // See check-in.route.ts header: created_by is unpopulated for existing
+    // inventory, so an organizer-only gate would 403 every real scan.
     const organizer = await createUser('authenticated');
     const stranger = await createUser('authenticated');
     cleanupUserIds.push(organizer.id, stranger.id);
@@ -181,7 +184,8 @@ describeIfReal('opportunity ownership + check-in', () => {
       headers: { authorization: `Bearer ${stranger.bearer}` },
       payload: { token },
     });
-    expect(res.statusCode).toBe(403);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().attendee.status).toBe('attended');
   });
 
   it('returns 401 when token is for a different event', async () => {
