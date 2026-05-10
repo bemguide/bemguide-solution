@@ -2,22 +2,19 @@
 // The organizer (or whoever runs the event) scans it to confirm
 // attendance.
 //
-// Token source order:
-//   1. Backend's `GET /opportunities/:id/check-in-token` — signed,
-//      verifiable by the organizer's scanner.
-//   2. Client-side fallback `evt:<eventId>|usr:<userId>` — used while
-//      the backend endpoint is still in flight so the demo flow
-//      doesn't break. Marked visually so the user (and organizer)
-//      know this is a placeholder.
+// Token comes from `GET /opportunities/:id/check-in-token` — the
+// backend signs whatever payload its scanner verifies (HMAC, JWT,
+// opaque key — backend's call). The frontend just renders it as a
+// QR.
 //
-// The QR itself is rendered by api.qrserver.com so we don't ship a
+// QR rendering goes through api.qrserver.com so we don't ship a
 // client-side QR library. ~150B per request, identical URL is
 // cacheable.
 
 "use client";
 
 import { useEffect, useState } from "react";
-import { ApiError, getCheckInToken, getCurrentUser, logApiError } from "@/lib/api";
+import { describeError, getCheckInToken, logApiError } from "@/lib/api";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 
@@ -35,8 +32,7 @@ function buildQrSrc(payload: string, sizePx = 360): string {
 
 type Source =
   | { kind: "loading" }
-  | { kind: "backend"; token: string; expires_at?: string }
-  | { kind: "fallback"; token: string }
+  | { kind: "ready"; token: string; expires_at?: string }
   | { kind: "error"; message: string };
 
 export function QrSheet({
@@ -64,28 +60,11 @@ export function QrSheet({
       try {
         const t = await getCheckInToken(eventId);
         if (cancelled) return;
-        setSource({ kind: "backend", token: t.token, expires_at: t.expires_at });
+        setSource({ kind: "ready", token: t.token, expires_at: t.expires_at });
       } catch (e) {
         if (cancelled) return;
-        // 404 = backend hasn't implemented the endpoint yet → fall back
-        // to the client-side payload so the user still sees a QR.
-        if (e instanceof ApiError && e.status === 404) {
-          try {
-            const me = await getCurrentUser();
-            if (cancelled) return;
-            setSource({
-              kind: "fallback",
-              token: `evt:${eventId}|usr:${me.id}`,
-            });
-          } catch (e2) {
-            if (cancelled) return;
-            logApiError("qr.fallback", e2);
-            setSource({ kind: "error", message: "Не вдалось згенерувати QR." });
-          }
-          return;
-        }
         logApiError("qr.token", e);
-        setSource({ kind: "error", message: "Не вдалось отримати QR." });
+        setSource({ kind: "error", message: describeError(e) });
       }
     }
     void load();
@@ -98,9 +77,7 @@ export function QrSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="space-y-4 px-5 pb-8 pt-6">
         <SheetTitle className="text-center">Покажи QR організатору</SheetTitle>
-        <p className="text-muted-foreground text-center text-sm">
-          {eventTitle}
-        </p>
+        <p className="text-muted-foreground text-center text-sm">{eventTitle}</p>
         <p className="text-muted-foreground text-center text-xs">{startedAlreadyLine}</p>
 
         <div className="bg-card border-border mx-auto flex aspect-square w-full max-w-[280px] items-center justify-center rounded-2xl border p-3">
@@ -117,12 +94,6 @@ export function QrSheet({
             />
           )}
         </div>
-
-        {source.kind === "fallback" ? (
-          <p className="text-muted-foreground mx-auto max-w-xs text-center text-xs">
-            Це попередній QR. Підпис організатора буде доданий, коли бекенд видає токен.
-          </p>
-        ) : null}
 
         <Button
           type="button"

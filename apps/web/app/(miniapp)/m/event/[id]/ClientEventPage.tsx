@@ -17,7 +17,6 @@ import { extractFirstUrl, prettyUrlHost } from "@/lib/url";
 import {
   ApiError,
   describeError,
-  getMyInvitations,
   getOpportunity,
   getOpportunityAttendees,
   getRoom,
@@ -31,16 +30,15 @@ import { EventActions } from "./EventActions";
 type Attending =
   /** GET /opportunities/:id/room hasn't resolved yet. */
   | { kind: "loading" }
-  /** No prior response — render the RSVP CTA. */
+  /** No prior response — render the RSVP CTA. Backend's `fix(rsvp):
+   *  allow re-subscribing after decline` made this branch the
+   *  destination for both "never RSVPed" and "previously declined"
+   *  users; the dedicated declined-state UI is gone. */
   | { kind: "no" }
-  /** User is in event_attendees. `room` is null when the worker hasn't
-   *  provisioned the chat yet (we'll keep showing "Чат готується…"). */
-  | { kind: "yes"; room: V2EventRoom | null }
-  /** Sticky decline: backend refuses re-accept (409 already_rsvped),
-   *  so the only way back in is to contact the organizer. We swap the
-   *  bottom bar for that affordance instead of leaving the user
-   *  staring at a broken "Я буду". */
-  | { kind: "declined" };
+  /** User is in event_attendees. `room` is null when the bot hasn't
+   *  attached a chat yet — we still surface the QR + share, the
+   *  "Чат події" link only appears once the bot has posted. */
+  | { kind: "yes"; room: V2EventRoom | null };
 
 type LoadState =
   | { kind: "loading" }
@@ -66,46 +64,28 @@ export function ClientEventPage({ id }: { id: string }) {
     let cancelled = false;
     async function load() {
       try {
-        // Four parallel calls so first paint is one-RTT:
+        // Three parallel calls so first paint is one-RTT:
         //   1. event itself (public)
         //   2. attendee count + names
-        //   3. /room — 200 means attending, 403 means "no row in
-        //      event_attendees", which covers BOTH "never responded"
-        //      and "declined".
-        //   4. /me/invitations (top page) — disambiguates 3 by
-        //      finding a row for this event with response='declined'.
-        //      Bounded to limit=50; users with hundreds of pending
-        //      invitations would lose the signal here, but that's
-        //      not a real shape today.
-        const [event, attendees, roomResult, invitations] = await Promise.all([
+        //   3. /room — 200 means attending, 403/404 means not. Used
+        //      to be 4 calls (also /me/invitations to disambiguate
+        //      "declined"), but backend dropped sticky-decline so
+        //      that probe is no longer needed.
+        const [event, attendees, attending] = await Promise.all([
           getOpportunity(id),
           getOpportunityAttendees(id),
           getRoom(id)
-            .then((room) => ({ ok: true as const, room }))
-            .catch((e: unknown) => ({ ok: false as const, error: e })),
-          getMyInvitations({ limit: 50 }).catch(() => ({ items: [], next_cursor: null })),
+            .then<Attending>((room) => ({ kind: "yes", room }))
+            .catch<Attending>((e: unknown) => {
+              if (e instanceof ApiError && (e.status === 403 || e.status === 404)) {
+                return { kind: "no" };
+              }
+              // Backend hiccup — surface the RSVP CTA anyway so the
+              // user can still try; the action handler will retry.
+              return { kind: "no" };
+            }),
         ]);
         if (cancelled) return;
-
-        let attending: Attending;
-        if (roomResult.ok) {
-          attending = { kind: "yes", room: roomResult.room };
-        } else {
-          const inv = invitations.items.find((i) => i.event_id === id);
-          if (inv?.response === "declined") {
-            attending = { kind: "declined" };
-          } else if (
-            roomResult.error instanceof ApiError &&
-            (roomResult.error.status === 403 || roomResult.error.status === 404)
-          ) {
-            attending = { kind: "no" };
-          } else {
-            // Backend hiccup — surface the RSVP CTA so the user can
-            // still try; the action handler will retry.
-            attending = { kind: "no" };
-          }
-        }
-
         setState({ kind: "ready", event, attendees, attending });
       } catch (e) {
         if (cancelled) return;
@@ -236,7 +216,6 @@ export function ClientEventPage({ id }: { id: string }) {
         eventTitle={event.title}
         eventStartAt={startDisplay}
         startedAlready={startedAlready(event.start_at)}
-        organizerContact={event.organizer_contact}
         city={event.city}
         attending={attending}
         onAttendingChange={(next) => {
