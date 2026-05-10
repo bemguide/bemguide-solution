@@ -11,7 +11,17 @@
 
 "use client";
 
-const BOT = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME?.trim();
+// Team convention is `NEXT_PUBLIC_TG_BOT_USERNAME`. We also accept
+// the longer `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` to avoid breaking
+// any deploy that already shipped that name. `next.config.ts`
+// mirrors the bare server-only `TELEGRAM_BOT_USERNAME` onto both
+// public names at build time, so a single var in `.env.local` is
+// enough for either consumer.
+const BOT = (
+  process.env.NEXT_PUBLIC_TG_BOT_USERNAME ??
+  process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ??
+  ""
+).trim();
 
 export function buildEventShareUrl(eventId: string): string {
   if (BOT) return `https://t.me/${BOT}?startapp=evt_${eventId}`;

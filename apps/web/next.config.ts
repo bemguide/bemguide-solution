@@ -3,17 +3,25 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   transpilePackages: ["@poruch/shared"],
-  // Expose the bot username to the client. The `.env.local` we
-  // already have only sets `TELEGRAM_BOT_USERNAME` (server-only),
-  // and that's also what the backend uses, so we mirror it onto
-  // a NEXT_PUBLIC_ name at build time instead of asking the user
-  // to maintain two copies of the same value.
-  env: {
-    NEXT_PUBLIC_TELEGRAM_BOT_USERNAME:
+  // Expose the bot username to the client under both names the
+  // codebase has used. Source priority:
+  //   1. NEXT_PUBLIC_TG_BOT_USERNAME       (team convention)
+  //   2. NEXT_PUBLIC_TELEGRAM_BOT_USERNAME  (older name)
+  //   3. TELEGRAM_BOT_USERNAME              (the bare server-only
+  //      value — matches the backend's env, single source of truth)
+  // Both public names get the same resolved value, so consumers can
+  // read whichever they prefer.
+  env: (() => {
+    const value =
+      process.env.NEXT_PUBLIC_TG_BOT_USERNAME ??
       process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ??
       process.env.TELEGRAM_BOT_USERNAME ??
-      "",
-  },
+      "";
+    return {
+      NEXT_PUBLIC_TG_BOT_USERNAME: value,
+      NEXT_PUBLIC_TELEGRAM_BOT_USERNAME: value,
+    };
+  })(),
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com" },
