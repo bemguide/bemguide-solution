@@ -340,6 +340,196 @@ curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/feed?city=Київ
 
 ---
 
+### `GET /feed?filter=health|rehabilitation|discounts`
+
+Topic-scoped flat feed, drawn from BOTH `opportunities` and `opportunity_health`
+and merged into a single ranked list. Powers Mini App tabs "Здоров'я",
+"Реабілітація", and "Знижки".
+
+|                |                                                            |
+| -------------- | ---------------------------------------------------------- |
+| Auth           | Bearer required                                            |
+| Implementation | `src/routes/feed.route.ts`, `src/services/feed.service.ts` |
+| Side-effects   | None                                                       |
+
+**Query**
+
+| Field    | Required | Notes                                                          |
+| -------- | -------- | -------------------------------------------------------------- |
+| `filter` | yes      | Strict enum: `'health'` \| `'rehabilitation'` \| `'discounts'` |
+| `city`   | no       | Defaults to `users.city`. Pass to override.                    |
+
+**Response 200**
+
+```ts
+interface FilteredFeedResponse {
+  filter: 'health' | 'rehabilitation' | 'discounts'; // echoed back
+  items: FeedItem[]; // ≤30 rows total
+}
+
+type FeedItem =
+  | (OpportunityCard & { source: 'opportunity' })
+  | (OpportunityHealthCard & { source: 'opportunity_health' });
+```
+
+The two source tables are merged into one flat list, sorted by `match_score desc`,
+capped at 30. **No time buckets** (unlike default `/feed`). The `source`
+discriminator tells the frontend which renderer to use.
+
+#### Tag clusters per filter
+
+| Filter           | Includes (any of)                                   | Excludes (any of)                                 |
+| ---------------- | --------------------------------------------------- | ------------------------------------------------- |
+| `health`         | `recovery`, `psychological_support`, `medical_care` | `rehabilitation`, `art_therapy`, `equine_therapy` |
+| `rehabilitation` | `rehabilitation`, `art_therapy`, `equine_therapy`   | —                                                 |
+| `discounts`      | `discount_promotions`                               | —                                                 |
+
+`health` and `rehabilitation` are **mutually exclusive on the query side**: a row
+carrying any rehabilitation-cluster tag is dropped from the health response,
+even if it also carries `medical_care` / `psychological_support`. So e.g.
+"Іпотерапія" appears under `rehabilitation` only, never `health`.
+
+#### `OpportunityCard`
+
+```ts
+interface OpportunityCard {
+  source: 'opportunity';
+
+  // identity
+  id: string; // uuid
+  title: string;
+  short_description: string | null;
+  description: string | null;
+  photo_url: string | null;
+
+  // location
+  city: string;
+  oblast: string | null;
+  address: string | null;
+  location_lat: number;
+  location_lng: number;
+
+  // schedule (opportunity-only)
+  start_at: string | null; // ISO with "+03:00"; null = always-on
+  ends_at: string | null;
+  duration_min: number | null;
+
+  // economics & contact
+  price_uah: number | null;
+  organizer_contact: string | null;
+
+  // tagging
+  interests: string[]; // legacy free-text array
+  classified_interest: string[]; // strict enum
+  accessibility_flags: AccessibilityFlag[];
+  target_age_range: AgeRange[];
+  target_identity_pref:
+    | 'any'
+    | 'women_only'
+    | 'men_only'
+    | 'mixed_with_women_emphasis'
+    | 'family_friendly';
+  target_veteran_status: VeteranStatus[];
+
+  // audit
+  created_at: string;
+  updated_at: string;
+
+  // decoration (added by /feed)
+  match_score?: number; // count of classified_interest overlap with user
+  attendee_count?: number;
+  names_visible?: string[]; // ≤6 opt-in names
+  distance_km?: number | null; // always null — frontend computes
+}
+```
+
+#### `OpportunityHealthCard`
+
+```ts
+interface OpportunityHealthCard {
+  source: 'opportunity_health';
+
+  id: string;
+  type: 'static';                                   // single value today; reserved for variants
+  title: string;
+  short_description: string | null;
+  description: string | null;
+  photo_url: string | null;
+
+  // location (same as OpportunityCard)
+  city: string;
+  oblast: string | null;
+  address: string | null;
+  location_lat: number;
+  location_lng: number;
+
+  // NO schedule — health resources are evergreen.
+
+  price_uah: number | null;                         // 0 = free, null = unspecified
+  organizer_contact: string | null;
+  visit_count: number;                              // analytics counter, ≥0
+
+  interests: string[];
+  classified_interest: string[];
+  accessibility_flags: AccessibilityFlag[];
+  target_age_range: AgeRange[];
+  target_identity_pref: ...;
+  target_veteran_status: VeteranStatus[];
+
+  created_at: string;
+  updated_at: string;
+
+  match_score?: number;
+  distance_km?: number | null;
+}
+```
+
+#### Behaviour contract
+
+1. **Past events excluded.** Opportunity rows with `start_at < now` are dropped.
+   Undated (`start_at IS NULL`, "always-on") always pass. `opportunity_health`
+   rows have no schedule and always pass.
+2. **City filter.** When `city` is supplied (or inferred from user profile),
+   only rows in that city are returned.
+3. **Sorting.** `match_score desc`, with each table internally pre-ordered by
+   `start_at asc nulls last` (opportunities) or `title asc` (opportunity_health)
+   as a stable secondary key. Final list capped at 30 rows.
+4. **`distance_km` always null** — frontend computes from city centroid + lat/lng.
+5. **`names_visible` is opt-in × 2.** A name appears only if both the attendee
+   AND the event opted in. Max 6 names.
+6. **`opportunity_health` has no `attendee_count`/`names_visible`** — it's an
+   evergreen resource, not an event.
+7. **Cross-filter overlap is allowed.** A row may surface in the default feed
+   (via e.g. `physical_sport`) AND in a filter (via e.g. `art_therapy`). This
+   is intended — hybrid events should be discoverable from multiple paths. The
+   only exclusion is `health` ↔ `rehabilitation`.
+
+#### Errors
+
+| Status | When                                                           |
+| ------ | -------------------------------------------------------------- |
+| 400    | `filter` not in the accepted enum, or `city` exceeds 120 chars |
+| 401    | Missing/invalid bearer                                         |
+| 404    | User profile not found (`code: user_not_found`)                |
+| 502    | Upstream Supabase failure                                      |
+
+All errors share `{ error: string, code?: string }`.
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/feed?filter=rehabilitation&city=Дніпро"
+```
+
+#### Live counts (post-v4 classifier, 2026-05-10)
+
+| Filter           | Rows | Notes                                                             |
+| ---------------- | ---- | ----------------------------------------------------------------- |
+| `health`         | 26   | Pure medicine + psychology (clinics, psych support, sensor rooms) |
+| `rehabilitation` | 40   | Rehab centres + therapy (art, equine, doll)                       |
+| `discounts`      | 9    | Commercial promos only                                            |
+
+---
+
 ### `GET /opportunities`
 
 Public list of opportunities, cursor-paginated.
