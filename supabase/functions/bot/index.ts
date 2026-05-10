@@ -14,13 +14,85 @@
 //   /myevents (organizer)                    list submitted events
 //   /newevent (organizer / veteran)         placeholder — full flow lands in M12
 
-import { Bot, InlineKeyboard, webhookCallback } from "grammy";
+import { Bot, Context, InlineKeyboard, webhookCallback } from "grammy";
 import { adminClient } from "../_shared/supabase.ts";
 import { env } from "../_shared/env.ts";
 
 const bot = new Bot(env.tgBotToken());
 const APP_URL = env.publicAppUrl();
 const MODERATOR_HANDLE = "@poruch_kyiv";
+
+// ----------------------------------------------------------------
+// Event-chat attach flow (helpers used by the group-context /start branch and
+// the my_chat_member handler). When a user creates a group via the Mini App's
+// `?startgroup=event_<id>` deep-link, the bot lands in the new group, exports
+// an invite link, and tells the auth-backend to attach it to event_rooms.
+// ----------------------------------------------------------------
+
+async function hmacHex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function attachChatToEvent(
+  eventId: string,
+  chatId: number,
+  inviteUrl: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const body = JSON.stringify({
+    event_id: eventId,
+    chat_id: String(chatId),
+    chat_invite_url: inviteUrl,
+  });
+  const sig = await hmacHex(env.botInternalSecret(), body);
+  const res = await fetch(`${env.backendBaseUrl()}/internal/event-rooms/attach`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-bot-signature": sig,
+    },
+    body,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return { ok: false, error: `${res.status}: ${text.slice(0, 200)}` };
+  }
+  return { ok: true };
+}
+
+async function handleGroupAddedForEvent(ctx: Context, eventId: string) {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  // Bot must be admin (or higher) to export an invite link.
+  let inviteUrl: string;
+  try {
+    inviteUrl = await ctx.exportChatInviteLink();
+  } catch (err) {
+    console.warn("exportChatInviteLink failed (likely not admin yet):", err);
+    return ctx.reply(
+      "Спочатку зробіть мене адміном цього чату — потім поверніться в Поруч і знову натисніть «Створити чат».",
+    );
+  }
+
+  const result = await attachChatToEvent(eventId, chatId, inviteUrl);
+  if (!result.ok) {
+    console.error("attachChatToEvent failed:", result.error);
+    return ctx.reply(
+      "Не вдалося зберегти посилання на чат. Спробуй ще раз через хвилину або напиши модератору.",
+    );
+  }
+  return ctx.reply("Готово! Чат прив'язано до події. Учасники побачать посилання у міні-аппі.");
+}
 
 // ----------------------------------------------------------------
 // /start  (with optional deep-link parameter)
@@ -30,11 +102,22 @@ bot.command("start", async (ctx) => {
   const firstName = ctx.from?.first_name ?? "";
   if (!fromId) return;
 
+  const param = ctx.match?.trim() ?? "";
+  const isGroup = ctx.chat?.type === "group" || ctx.chat?.type === "supergroup";
+
+  // Group-context: bot was just added to a group via the Mini App's
+  // `?startgroup=event_<id>` deep-link. Don't ensureVeteran (group-adds aren't
+  // user-onboarding events) — go straight to the attach flow.
+  if (isGroup) {
+    if (param.startsWith("event_")) {
+      return handleGroupAddedForEvent(ctx, param.slice(6));
+    }
+    return; // unknown deep-link param in a group context; stay silent
+  }
+
   // Normalise/upsert the veteran by tg_user_id. We capture only display_name on
   // first contact; full onboarding happens in the Mini App.
   await ensureVeteran(fromId, firstName);
-
-  const param = ctx.match?.trim() ?? "";
 
   if (param.startsWith("evt_")) {
     const slug = param.slice(4);
