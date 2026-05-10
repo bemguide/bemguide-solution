@@ -148,10 +148,10 @@ Railway dashboard → `auth-backend` service → **Variables** tab → add `BOT_
 Vercel (or wherever `apps/web` is hosted) → environment variables → add:
 
 ```
-NEXT_PUBLIC_TG_BOT_USERNAME=<your-bot-username-without-@>
+NEXT_PUBLIC_TG_BOT_USERNAME=bembembem_testbot
 ```
 
-If unset, `EventChatButton` renders nothing (deliberate — a button that silently does nothing is worse than no button).
+(Bot username, no leading `@`. Already saved locally to `apps/web/.env.local` for dev.) If unset, `EventChatButton` renders nothing (deliberate — a button that silently does nothing is worse than no button).
 
 ### 5. @BotFather one-time
 

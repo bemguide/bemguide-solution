@@ -77,10 +77,10 @@ The state is owned at the `ClientEventPage` level so any other component (the `W
 
 ```bash
 # Mini App deploy (Vercel for apps/web, or wherever)
-NEXT_PUBLIC_TG_BOT_USERNAME=bemguide_bot   # without the leading @
+NEXT_PUBLIC_TG_BOT_USERNAME=bembembem_testbot   # without the leading @
 ```
 
-If unset at build time, `EventChatButton` returns `null` and the button is invisible. There's intentionally no error toast — misconfigured prod env shouldn't surface to users; check the deploy logs / env-vars page.
+Already set locally in `apps/web/.env.local` (gitignored). If unset at build time, `EventChatButton` returns `null` and the button is invisible. There's intentionally no error toast — misconfigured prod env shouldn't surface to users; check the deploy logs / env-vars page.
 
 ## Backend dependencies
 
