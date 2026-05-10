@@ -1,0 +1,58 @@
+# Keep the bemguide-chat agent backend warm.
+#
+# Why this exists: the agent backend lives on Railway. When the dyno
+# idles long enough, the next user request pays a 20-30s spin-up tax,
+# which from the Mini App looks like the chat is hung (the user gave
+# up after "10 minutes" and reported it as a bug). A ~5-minute health
+# ping keeps the process resident so the next real user request hits
+# a warm container.
+#
+# Notes:
+#   - GitHub Actions cron is "best-effort" — schedules can drift by a
+#     few minutes under load. That's fine; the dyno's idle threshold
+#     is much wider than the drift, so we don't need precision.
+#   - 5 minutes is the smallest interval GHA accepts.
+#   - The job hits `/healthz` (cheap, no Supabase/OpenAI hops) and
+#     fails the run loudly if the backend itself is down — so the
+#     Actions tab doubles as an outage signal without any external
+#     monitoring service.
+#   - If you ever want to stop pinging (because Railway plan changed
+#     or you set up real uptime monitoring), `workflow_dispatch` is
+#     also wired so you can disable via the UI without deleting.
+
+name: agent-keepalive
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping agent /healthz
+        env:
+          AGENT_URL: https://bemguide-chat-production.up.railway.app
+        run: |
+          set -e
+          # `--connect-timeout 10` covers Railway dyno spin-up; once
+          # the connection is established, `--max-time 30` is generous
+          # for what should be a sub-100ms healthz response.
+          status=$(curl -sS \
+            --connect-timeout 10 \
+            --max-time 30 \
+            -o /tmp/healthz.json \
+            -w "%{http_code}" \
+            "$AGENT_URL/healthz")
+          echo "status=$status"
+          cat /tmp/healthz.json || true
+          echo
+          if [ "$status" != "200" ]; then
+            echo "::error::agent /healthz returned $status"
+            exit 1
+          fi
