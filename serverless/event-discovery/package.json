@@ -1,0 +1,22 @@
+{
+  "name": "@bemguide/event-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod",
+    "typecheck": "tsc --noEmit",
+    "test:local": "tsx scripts/local-run.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
+    "@vercel/node": "^3.2.0",
+    "openai": "^4.104.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  }
+}
